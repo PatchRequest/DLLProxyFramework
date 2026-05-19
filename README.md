@@ -126,6 +126,54 @@ When the host process would exit immediately (e.g. printing `--help`), `--block`
 
 Both paths are deadlock-free — no loader lock involvement.
 
+## Testing
+
+A test suite is included that verifies all four mode combinations against `version.dll`. Requires MSVC (Developer Command Prompt).
+
+```
+cd test
+run_tests.bat
+```
+
+This generates proxies, builds them, and runs a test host (`test_host.c`) that loads the proxy DLL, calls `GetFileVersionInfoSizeA`, and exits immediately. The tests verify:
+
+| Test | Mode | Verifies |
+|------|------|----------|
+| 1 | `--embed --payload` | Embedded DLL extraction + export forwarding works |
+| 2 | `--embed --payload --block` | Block mode keeps process alive, payload completes |
+| 3 | `--payload` (no embed) | Side-by-side DLL loading + export forwarding works |
+| 4 | `--payload --block` (no embed) | Block mode works without embedding |
+
+Expected output:
+```
+============================================================
+ DLL Proxy Framework - Test Suite
+============================================================
+
+[*] Compiling test host...
+[+] test_host.exe ready
+
+[TEST 1] --embed --payload
+------------------------------------------------------------
+[+] PASS: Embed forwarding works, host exited normally
+
+[TEST 2] --embed --payload --block
+------------------------------------------------------------
+[+] PASS: Embed + block kept process alive, payload completed
+
+[TEST 3] --payload (no embed, no block)
+------------------------------------------------------------
+[+] PASS: Non-embed forwarding works, host exited normally
+
+[TEST 4] --payload --block (no embed)
+------------------------------------------------------------
+[+] PASS: Non-embed + block works, payload completed
+
+============================================================
+ Results: 4 passed, 0 failed
+============================================================
+```
+
 ## Non-Embed Mode
 
 Without `--embed`, the proxy loads the original DLL from disk at runtime. Rename the original and place it alongside the proxy:

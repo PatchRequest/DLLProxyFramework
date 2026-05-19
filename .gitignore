@@ -33,5 +33,6 @@ Desktop.ini
 .DS_Store
 
 # Test artifacts
+test/out/
 test/payload_proof.txt
 payload_proof.txt
