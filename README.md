@@ -1,5 +1,13 @@
 # DLL Proxy Framework
 
+## Why DLL Sideloading?
+
+DLL sideloading lets your code — whether it's a game cheat, C2 agent, or red team implant — execute inside a legitimate, signed process. To a defender triaging alerts or reviewing logs, the running `.exe` looks completely benign: it's a trusted vendor binary with a valid signature. Your payload is just along for the ride as a DLL it was going to load anyway.
+
+This framework automates the tedious part: analyzing the target DLL's exports, generating the proxy code that forwards every function call to the original, and giving you a clean slot for your payload. Pick a [hijackable DLL](https://hijacklibs.net), run one command, drop in your code, build.
+
+---
+
 Generate proxy DLL projects for DLL sideloading and hijacking research. Point it at a DLL, get a ready-to-compile project that mirrors all exports and forwards them to the original — with a slot for your payload code.
 
 ## Workflow
