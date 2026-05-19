@@ -93,8 +93,8 @@ build_msvc.bat
 
 **MinGW**:
 ```
-cd output/version_proxy
-make
+cd output\version_proxy
+mingw32-make
 ```
 
 ## How It Works
@@ -128,7 +128,7 @@ Both paths are deadlock-free — no loader lock involvement.
 
 ## Testing
 
-A test suite is included that verifies all four mode combinations against `version.dll`. Requires MSVC (Developer Command Prompt).
+A test suite verifies all mode combinations against `version.dll` for both compilers. Requires a Developer Command Prompt (MSVC). GCC tests run automatically if `gcc` and `mingw32-make` are on PATH.
 
 ```
 cd test
@@ -137,12 +137,16 @@ run_tests.bat
 
 This generates proxies, builds them, and runs a test host (`test_host.c`) that loads the proxy DLL, calls `GetFileVersionInfoSizeA`, and exits immediately. The tests verify:
 
-| Test | Mode | Verifies |
-|------|------|----------|
-| 1 | `--embed --payload` | Embedded DLL extraction + export forwarding works |
-| 2 | `--embed --payload --block` | Block mode keeps process alive, payload completes |
-| 3 | `--payload` (no embed) | Side-by-side DLL loading + export forwarding works |
-| 4 | `--payload --block` (no embed) | Block mode works without embedding |
+| Test | Compiler | Mode | Verifies |
+|------|----------|------|----------|
+| 1 | MSVC | `--embed --payload` | Embedded DLL extraction + export forwarding |
+| 2 | MSVC | `--embed --payload --block` | Block mode keeps process alive, payload completes |
+| 3 | MSVC | `--payload` | Side-by-side DLL loading + export forwarding |
+| 4 | MSVC | `--payload --block` | Block mode without embedding |
+| 5 | GCC | `--embed --payload` | GCC embedded DLL extraction + forwarding |
+| 6 | GCC | `--embed --payload --block` | GCC block mode with embedding |
+| 7 | GCC | `--payload` | GCC side-by-side loading + forwarding |
+| 8 | GCC | `--payload --block` | GCC block mode without embedding |
 
 Expected output:
 ```
@@ -153,24 +157,42 @@ Expected output:
 [*] Compiling test host...
 [+] test_host.exe ready
 
-[TEST 1] --embed --payload
-------------------------------------------------------------
-[+] PASS: Embed forwarding works, host exited normally
+[*] MinGW detected - GCC tests enabled
 
-[TEST 2] --embed --payload --block
+[TEST 1/MSVC] --embed --payload
 ------------------------------------------------------------
-[+] PASS: Embed + block kept process alive, payload completed
+[+] PASS: MSVC embed forwarding works
 
-[TEST 3] --payload (no embed, no block)
+[TEST 2/MSVC] --embed --payload --block
 ------------------------------------------------------------
-[+] PASS: Non-embed forwarding works, host exited normally
+[+] PASS: MSVC embed + block works
 
-[TEST 4] --payload --block (no embed)
+[TEST 3/MSVC] --payload (no embed, no block)
 ------------------------------------------------------------
-[+] PASS: Non-embed + block works, payload completed
+[+] PASS: MSVC non-embed forwarding works
+
+[TEST 4/MSVC] --payload --block (no embed)
+------------------------------------------------------------
+[+] PASS: MSVC non-embed + block works
+
+[TEST 5/GCC] --embed --payload
+------------------------------------------------------------
+[+] PASS: GCC embed forwarding works
+
+[TEST 6/GCC] --embed --payload --block
+------------------------------------------------------------
+[+] PASS: GCC embed + block works
+
+[TEST 7/GCC] --payload (no embed, no block)
+------------------------------------------------------------
+[+] PASS: GCC non-embed forwarding works
+
+[TEST 8/GCC] --payload --block (no embed)
+------------------------------------------------------------
+[+] PASS: GCC non-embed + block works
 
 ============================================================
- Results: 4 passed, 0 failed
+ Results: 8 passed, 0 failed
 ============================================================
 ```
 

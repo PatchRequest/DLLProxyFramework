@@ -1,6 +1,7 @@
 @echo off
 REM DLL Proxy Framework - End-to-end test suite
-REM Run from a Visual Studio Developer Command Prompt
+REM Run from a Visual Studio Developer Command Prompt (MSVC tests)
+REM MinGW tests require gcc and mingw32-make on PATH
 REM Usage: cd test && run_tests.bat
 
 setlocal enabledelayedexpansion
@@ -27,13 +28,27 @@ if errorlevel 1 (
 echo [+] test_host.exe ready
 echo.
 
+REM --- Detect MinGW ---
+set HAS_GCC=0
+where gcc >nul 2>&1
+if not errorlevel 1 (
+    where mingw32-make >nul 2>&1
+    if not errorlevel 1 (
+        set HAS_GCC=1
+        echo [*] MinGW detected - GCC tests enabled
+    )
+)
+if "!HAS_GCC!"=="0" echo [*] MinGW not found - skipping GCC tests
+echo.
+
 REM ============================================================
-REM  Test 1: embed, no block
+REM  MSVC Tests
 REM ============================================================
-echo [TEST 1] --embed --payload
+
+echo [TEST 1/MSVC] --embed --payload
 echo ------------------------------------------------------------
 
-python "%ROOT%\generate.py" %TARGET% --payload --embed -o "%ROOT%\test\out\t1" >nul 2>&1
+python "%ROOT%\generate.py" %TARGET% --payload --embed --compiler msvc -o "%ROOT%\test\out\t1" >nul 2>&1
 cd /d "%ROOT%\test\out\t1"
 call .\build_msvc.bat >nul 2>&1
 if errorlevel 1 (
@@ -49,20 +64,16 @@ if errorlevel 1 (
     echo [-] FAIL: Export forwarding did not work
     set /a FAIL+=1
 ) else (
-    echo [+] PASS: Embed forwarding works, host exited normally
+    echo [+] PASS: MSVC embed forwarding works
     set /a PASS+=1
 )
 
 :test2
 echo.
-
-REM ============================================================
-REM  Test 2: embed + block
-REM ============================================================
-echo [TEST 2] --embed --payload --block
+echo [TEST 2/MSVC] --embed --payload --block
 echo ------------------------------------------------------------
 
-python "%ROOT%\generate.py" %TARGET% --payload --embed --block -o "%ROOT%\test\out\t2" >nul 2>&1
+python "%ROOT%\generate.py" %TARGET% --payload --embed --block --compiler msvc -o "%ROOT%\test\out\t2" >nul 2>&1
 cd /d "%ROOT%\test\out\t2"
 copy /Y "%ROOT%\test\test_payload_block.c" payload.c >nul
 
@@ -78,23 +89,19 @@ if exist proof.txt del proof.txt
 .\test_host.exe >nul 2>&1
 
 if exist proof.txt (
-    echo [+] PASS: Embed + block kept process alive, payload completed
+    echo [+] PASS: MSVC embed + block works
     set /a PASS+=1
 ) else (
-    echo [-] FAIL: Proof file missing - payload did not complete
+    echo [-] FAIL: Proof file missing
     set /a FAIL+=1
 )
 
 :test3
 echo.
-
-REM ============================================================
-REM  Test 3: no embed, no block
-REM ============================================================
-echo [TEST 3] --payload (no embed, no block)
+echo [TEST 3/MSVC] --payload (no embed, no block)
 echo ------------------------------------------------------------
 
-python "%ROOT%\generate.py" %TARGET% --payload -o "%ROOT%\test\out\t3" >nul 2>&1
+python "%ROOT%\generate.py" %TARGET% --payload --compiler msvc -o "%ROOT%\test\out\t3" >nul 2>&1
 cd /d "%ROOT%\test\out\t3"
 call .\build_msvc.bat >nul 2>&1
 if errorlevel 1 (
@@ -111,24 +118,132 @@ if errorlevel 1 (
     echo [-] FAIL: Export forwarding did not work
     set /a FAIL+=1
 ) else (
-    echo [+] PASS: Non-embed forwarding works, host exited normally
+    echo [+] PASS: MSVC non-embed forwarding works
     set /a PASS+=1
 )
 
 :test4
 echo.
-
-REM ============================================================
-REM  Test 4: no embed + block
-REM ============================================================
-echo [TEST 4] --payload --block (no embed)
+echo [TEST 4/MSVC] --payload --block (no embed)
 echo ------------------------------------------------------------
 
-python "%ROOT%\generate.py" %TARGET% --payload --block -o "%ROOT%\test\out\t4" >nul 2>&1
+python "%ROOT%\generate.py" %TARGET% --payload --block --compiler msvc -o "%ROOT%\test\out\t4" >nul 2>&1
 cd /d "%ROOT%\test\out\t4"
 copy /Y "%ROOT%\test\test_payload_block.c" payload.c >nul
 
 call .\build_msvc.bat >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Build failed
+    set /a FAIL+=1
+    goto :gcc_tests
+)
+copy "%ROOT%\test\out\test_host.exe" . >nul
+copy %TARGET% original_version.dll >nul
+if exist proof.txt del proof.txt
+
+.\test_host.exe >nul 2>&1
+
+if exist proof.txt (
+    echo [+] PASS: MSVC non-embed + block works
+    set /a PASS+=1
+) else (
+    echo [-] FAIL: Proof file missing
+    set /a FAIL+=1
+)
+
+:gcc_tests
+echo.
+if "!HAS_GCC!"=="0" goto :summary
+
+REM ============================================================
+REM  GCC/MinGW Tests
+REM ============================================================
+
+echo [TEST 5/GCC] --embed --payload
+echo ------------------------------------------------------------
+
+python "%ROOT%\generate.py" %TARGET% --payload --embed --compiler gcc -o "%ROOT%\test\out\t5" >nul 2>&1
+cd /d "%ROOT%\test\out\t5"
+mingw32-make >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Build failed
+    set /a FAIL+=1
+    goto :test6
+)
+copy "%ROOT%\test\out\test_host.exe" . >nul
+
+.\test_host.exe > output.txt 2>&1
+findstr /C:"GetFileVersionInfoSizeA" output.txt >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Export forwarding did not work
+    set /a FAIL+=1
+) else (
+    echo [+] PASS: GCC embed forwarding works
+    set /a PASS+=1
+)
+
+:test6
+echo.
+echo [TEST 6/GCC] --embed --payload --block
+echo ------------------------------------------------------------
+
+python "%ROOT%\generate.py" %TARGET% --payload --embed --block --compiler gcc -o "%ROOT%\test\out\t6" >nul 2>&1
+cd /d "%ROOT%\test\out\t6"
+copy /Y "%ROOT%\test\test_payload_block.c" payload.c >nul
+mingw32-make >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Build failed
+    set /a FAIL+=1
+    goto :test7
+)
+copy "%ROOT%\test\out\test_host.exe" . >nul
+if exist proof.txt del proof.txt
+
+.\test_host.exe >nul 2>&1
+
+if exist proof.txt (
+    echo [+] PASS: GCC embed + block works
+    set /a PASS+=1
+) else (
+    echo [-] FAIL: Proof file missing
+    set /a FAIL+=1
+)
+
+:test7
+echo.
+echo [TEST 7/GCC] --payload (no embed, no block)
+echo ------------------------------------------------------------
+
+python "%ROOT%\generate.py" %TARGET% --payload --compiler gcc -o "%ROOT%\test\out\t7" >nul 2>&1
+cd /d "%ROOT%\test\out\t7"
+mingw32-make >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Build failed
+    set /a FAIL+=1
+    goto :test8
+)
+copy "%ROOT%\test\out\test_host.exe" . >nul
+copy %TARGET% original_version.dll >nul
+
+.\test_host.exe > output.txt 2>&1
+findstr /C:"GetFileVersionInfoSizeA" output.txt >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Export forwarding did not work
+    set /a FAIL+=1
+) else (
+    echo [+] PASS: GCC non-embed forwarding works
+    set /a PASS+=1
+)
+
+:test8
+echo.
+echo [TEST 8/GCC] --payload --block (no embed)
+echo ------------------------------------------------------------
+
+python "%ROOT%\generate.py" %TARGET% --payload --block --compiler gcc -o "%ROOT%\test\out\t8" >nul 2>&1
+cd /d "%ROOT%\test\out\t8"
+copy /Y "%ROOT%\test\test_payload_block.c" payload.c >nul
+mingw32-make >nul 2>&1
 if errorlevel 1 (
     echo [-] FAIL: Build failed
     set /a FAIL+=1
@@ -141,10 +256,10 @@ if exist proof.txt del proof.txt
 .\test_host.exe >nul 2>&1
 
 if exist proof.txt (
-    echo [+] PASS: Non-embed + block works, payload completed
+    echo [+] PASS: GCC non-embed + block works
     set /a PASS+=1
 ) else (
-    echo [-] FAIL: Proof file missing - payload did not complete
+    echo [-] FAIL: Proof file missing
     set /a FAIL+=1
 )
 
