@@ -221,13 +221,23 @@ Expose an entry point with C linkage:
 
 ```rust
 // src/lib.rs
+use std::fs;
+use std::io::Write;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cheat_main() {
     // your cheat / implant / agent logic here
     // this runs in its own thread inside the hijacked process
+
+    let pid = std::process::id();
+    let msg = format!("Cheat running in PID {}\n", pid);
+    if let Ok(mut f) = fs::File::create("proof.txt") {
+        let _ = f.write_all(msg.as_bytes());
+    }
 }
 ```
+
+> Note: Rust 2024 edition requires `#[unsafe(no_mangle)]`. For older editions use `#[no_mangle]`.
 
 Build it:
 

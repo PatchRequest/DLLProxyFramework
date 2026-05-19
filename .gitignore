@@ -32,7 +32,12 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+# Rust build artifacts
+target/
+test/rust_cheat/target/
+
 # Test artifacts
 test/out/
 test/payload_proof.txt
 payload_proof.txt
+rust_proof.txt
