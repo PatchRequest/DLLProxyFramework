@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Generated output
+output/
+
+# Build artifacts
+*.obj
+*.o
+*.res
+*.lib
+*.exp
+*.dll
+*.exe
+*.pdb
+*.ilk
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Test artifacts
+test/payload_proof.txt
+payload_proof.txt

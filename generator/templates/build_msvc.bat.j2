@@ -1,0 +1,37 @@
+@echo off
+REM Auto-generated build script for {{ dll_name }} proxy (MSVC)
+REM Run from a Visual Studio Developer Command Prompt
+
+echo [*] Assembling trampolines...
+{% if is_64bit %}
+ml64 /c /nologo trampolines.asm
+{% else %}
+ml /c /nologo /coff trampolines.asm
+{% endif %}
+if errorlevel 1 goto :error
+
+{% if embed_enabled %}
+echo [*] Compiling resources...
+rc /nologo /fo resource.res resource.rc
+if errorlevel 1 goto :error
+{% endif %}
+
+echo [*] Compiling and linking...
+cl /nologo /LD ^
+    proxy.c ^
+{% if payload_enabled %}
+    payload.c ^
+{% endif %}
+    trampolines.obj ^
+{% if embed_enabled %}
+    resource.res ^
+{% endif %}
+    /link /DEF:exports.def /OUT:{{ dll_name_no_ext }}.dll kernel32.lib user32.lib
+if errorlevel 1 goto :error
+
+echo [+] Build successful: {{ dll_name_no_ext }}.dll
+goto :eof
+
+:error
+echo [-] Build failed!
+exit /b 1
