@@ -28,6 +28,7 @@ python generate.py C:\Windows\System32\version.dll --payload --embed --block
 - **Embed mode** (`--embed`) — Bakes the original DLL as a PE resource. At load time it extracts to `%TEMP%` and loads it. No need to ship a second DLL file.
 - **Payload thread** (`--payload`) — Generates a `payload.c` template. Your code runs in a separate thread after all exports are resolved.
 - **Block mode** (`--block`) — Suspends the main thread so the process can't exit before your payload finishes. Uses a two-layer approach: primary suspend + atexit fallback. No loader lock issues.
+- **MetaTwin cloning** — Automatically clones PE version info (CompanyName, FileDescription, FileVersion, etc.) and Authenticode signature from the source DLL. The proxy looks identical to the original in file properties and shows the original signer in signature dialogs.
 - **Dual compiler support** — Generates both MSVC (`.asm` + `build_msvc.bat`) and MinGW (`.S` + `Makefile`) build files.
 - **Both architectures** — x86 and x64, auto-detected from the input DLL.
 
@@ -84,9 +85,10 @@ version_proxy/
 ├── trampolines.S        # MinGW GAS — same, AT&T/Intel syntax
 ├── payload.c            # Your code goes here
 ├── payload.h            # Payload thread declaration
-├── resource.rc          # Embedded DLL resource (--embed)
+├── resource.rc          # Version info + embedded DLL resource
 ├── resource.h           # Resource IDs
-├── original_version.dll # Copy of original DLL (--embed)
+├── original_version.dll # Copy of original DLL
+├── sigclone.py          # Post-build signature cloner (auto-run)
 ├── build_msvc.bat       # Build with cl.exe + ml64.exe
 └── Makefile             # Build with gcc + as
 ```
@@ -155,6 +157,8 @@ This generates proxies, builds them, and runs a test host (`test_host.c`) that l
 | 6 | GCC | `--embed --payload --block` | GCC block mode with embedding |
 | 7 | GCC | `--payload` | GCC side-by-side loading + forwarding |
 | 8 | GCC | `--payload --block` | GCC block mode without embedding |
+| 9 | MSVC | `--embed --payload --block` | MetaTwin: version info + signature cloned correctly |
+| 10 | GCC | `--embed --payload --block` | MetaTwin: version info + signature cloned correctly |
 
 Expected output:
 ```
@@ -170,38 +174,33 @@ Expected output:
 [TEST 1/MSVC] --embed --payload
 ------------------------------------------------------------
 [+] PASS: MSVC embed forwarding works
-
-[TEST 2/MSVC] --embed --payload --block
+...
+[TEST 9/META] MSVC --embed --payload --block (metadata + signature)
 ------------------------------------------------------------
-[+] PASS: MSVC embed + block works
+[+] PASS: MSVC embed + block + metatwin
 
-[TEST 3/MSVC] --payload (no embed, no block)
+[TEST 10/META] GCC --embed --payload --block (metadata + signature)
 ------------------------------------------------------------
-[+] PASS: MSVC non-embed forwarding works
-
-[TEST 4/MSVC] --payload --block (no embed)
-------------------------------------------------------------
-[+] PASS: MSVC non-embed + block works
-
-[TEST 5/GCC] --embed --payload
-------------------------------------------------------------
-[+] PASS: GCC embed forwarding works
-
-[TEST 6/GCC] --embed --payload --block
-------------------------------------------------------------
-[+] PASS: GCC embed + block works
-
-[TEST 7/GCC] --payload (no embed, no block)
-------------------------------------------------------------
-[+] PASS: GCC non-embed forwarding works
-
-[TEST 8/GCC] --payload --block (no embed)
-------------------------------------------------------------
-[+] PASS: GCC non-embed + block works
+[+] PASS: GCC embed + block + metatwin
 
 ============================================================
- Results: 8 passed, 0 failed
+ Results: 10 passed, 0 failed
 ============================================================
+```
+
+### MetaTwin (Metadata + Signature Cloning)
+
+The framework automatically clones the source DLL's identity onto the proxy:
+
+1. **Version info** — CompanyName, FileDescription, FileVersion, ProductName, Copyright, etc. are extracted during analysis and compiled into the proxy via `resource.rc`. The proxy's file properties look identical to the original.
+
+2. **Authenticode signature** — After the build, `sigclone.py` copies the source DLL's Authenticode signature onto the proxy. The signature shows the original signer (e.g. "Microsoft Windows") but will report `HashMismatch` under full validation since the binary content differs. Tools that only check for signature presence or display the signer name without validating the hash will show the proxy as signed by the original vendor.
+
+Both steps are automatic — no flags needed. If the source DLL has version info, it's cloned. If it's signed, the signature is cloned as a post-build step.
+
+```
+Original:  Valid    | CN=Microsoft Windows, O=Microsoft Corporation
+Proxy:     HashMismatch | CN=Microsoft Windows, O=Microsoft Corporation
 ```
 
 ## Example: Linking a Rust Cheat / Implant

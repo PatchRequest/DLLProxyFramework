@@ -28,6 +28,40 @@ class ExportEntry:
 
 
 @dataclass
+class VersionInfo:
+    company_name: str = ""
+    file_description: str = ""
+    file_version: str = ""
+    internal_name: str = ""
+    legal_copyright: str = ""
+    original_filename: str = ""
+    product_name: str = ""
+    product_version: str = ""
+    file_version_ms: int = 0
+    file_version_ls: int = 0
+    product_version_ms: int = 0
+    product_version_ls: int = 0
+
+    @property
+    def file_version_tuple(self) -> tuple[int, int, int, int]:
+        return (
+            (self.file_version_ms >> 16) & 0xFFFF,
+            self.file_version_ms & 0xFFFF,
+            (self.file_version_ls >> 16) & 0xFFFF,
+            self.file_version_ls & 0xFFFF,
+        )
+
+    @property
+    def product_version_tuple(self) -> tuple[int, int, int, int]:
+        return (
+            (self.product_version_ms >> 16) & 0xFFFF,
+            self.product_version_ms & 0xFFFF,
+            (self.product_version_ls >> 16) & 0xFFFF,
+            self.product_version_ls & 0xFFFF,
+        )
+
+
+@dataclass
 class ExportTable:
     dll_name: str
     dll_name_no_ext: str
@@ -35,6 +69,8 @@ class ExportTable:
     is_64bit: bool
     ordinal_base: int
     exports: list[ExportEntry] = field(default_factory=list)
+    version_info: VersionInfo | None = None
+    has_signature: bool = False
 
     @property
     def named_exports(self) -> list[ExportEntry]:
@@ -126,5 +162,41 @@ class PEAnalyzer:
             table.exports.append(entry)
 
         table.exports.sort(key=lambda e: e.ordinal)
+
+        # Extract version info
+        vi = VersionInfo()
+        string_fields = {
+            b'CompanyName': 'company_name',
+            b'FileDescription': 'file_description',
+            b'FileVersion': 'file_version',
+            b'InternalName': 'internal_name',
+            b'LegalCopyright': 'legal_copyright',
+            b'OriginalFilename': 'original_filename',
+            b'ProductName': 'product_name',
+            b'ProductVersion': 'product_version',
+        }
+        if hasattr(pe, 'FileInfo'):
+            for fi in pe.FileInfo:
+                for entry in fi:
+                    if hasattr(entry, 'StringTable'):
+                        for st in entry.StringTable:
+                            for k, v in st.entries.items():
+                                attr = string_fields.get(k)
+                                if attr:
+                                    setattr(vi, attr, v.decode('utf-8', errors='replace'))
+        if hasattr(pe, 'VS_FIXEDFILEINFO') and pe.VS_FIXEDFILEINFO:
+            ffi = pe.VS_FIXEDFILEINFO[0]
+            vi.file_version_ms = ffi.FileVersionMS
+            vi.file_version_ls = ffi.FileVersionLS
+            vi.product_version_ms = ffi.ProductVersionMS
+            vi.product_version_ls = ffi.ProductVersionLS
+
+        if vi.company_name or vi.file_description:
+            table.version_info = vi
+
+        # Check for Authenticode signature
+        sec_dir = pe.OPTIONAL_HEADER.DATA_DIRECTORY[4]  # IMAGE_DIRECTORY_ENTRY_SECURITY
+        table.has_signature = sec_dir.VirtualAddress != 0 and sec_dir.Size != 0
+
         pe.close()
         return table

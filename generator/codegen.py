@@ -19,6 +19,8 @@ class CodeGenerator:
         if original_dll_path is None:
             original_dll_path = original_dll_filename
 
+        has_resources = embed_enabled or export_table.version_info is not None
+
         ctx = {
             'dll_name': export_table.dll_name,
             'dll_name_no_ext': export_table.dll_name_no_ext,
@@ -32,8 +34,11 @@ class CodeGenerator:
             'embed_enabled': embed_enabled,
             'payload_enabled': payload_enabled,
             'block_enabled': block_enabled,
+            'has_resources': has_resources,
             'original_dll_filename': original_dll_filename,
             'original_dll_path': original_dll_path,
+            'version_info': export_table.version_info,
+            'has_signature': export_table.has_signature,
         }
 
         files = {}
@@ -56,7 +61,7 @@ class CodeGenerator:
                 files['trampolines.S'] = self.engine.render('trampoline_gcc_x86.S.j2', ctx)
             files['Makefile'] = self.engine.render('Makefile.j2', ctx)
 
-        if embed_enabled:
+        if has_resources:
             files['resource.rc'] = self.engine.render('resource.rc.j2', ctx)
             files['resource.h'] = self.engine.render('resource.h.j2', ctx)
 

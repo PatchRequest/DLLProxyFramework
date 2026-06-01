@@ -263,6 +263,90 @@ if exist proof.txt (
     set /a FAIL+=1
 )
 
+REM ============================================================
+REM  MetaTwin Tests (metadata + signature cloning)
+REM ============================================================
+
+:test9
+echo.
+echo [TEST 9/META] MSVC --embed --payload --block (metadata + signature)
+echo ------------------------------------------------------------
+
+python "%ROOT%\generate.py" %TARGET% --payload --embed --block --compiler msvc -o "%ROOT%\test\out\t9" >nul 2>&1
+cd /d "%ROOT%\test\out\t9"
+copy /Y "%ROOT%\test\test_payload_block.c" payload.c >nul
+
+call .\build_msvc.bat >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Build failed
+    set /a FAIL+=1
+    goto :test10
+)
+copy "%ROOT%\test\out\test_host.exe" . >nul
+if exist proof.txt del proof.txt
+
+.\test_host.exe >nul 2>&1
+
+set T9_OK=1
+if not exist proof.txt (
+    echo [-] FAIL: Proof file missing
+    set T9_OK=0
+    set /a FAIL+=1
+)
+
+python "%ROOT%\test\verify_meta.py" original_version.dll version.dll >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Metadata/signature verification failed
+    set T9_OK=0
+    set /a FAIL+=1
+)
+
+if "!T9_OK!"=="1" (
+    echo [+] PASS: MSVC embed + block + metatwin
+    set /a PASS+=1
+)
+
+:test10
+echo.
+if "!HAS_GCC!"=="0" goto :summary
+
+echo [TEST 10/META] GCC --embed --payload --block (metadata + signature)
+echo ------------------------------------------------------------
+
+python "%ROOT%\generate.py" %TARGET% --payload --embed --block --compiler gcc -o "%ROOT%\test\out\t10" >nul 2>&1
+cd /d "%ROOT%\test\out\t10"
+copy /Y "%ROOT%\test\test_payload_block.c" payload.c >nul
+
+mingw32-make >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Build failed
+    set /a FAIL+=1
+    goto :summary
+)
+copy "%ROOT%\test\out\test_host.exe" . >nul
+if exist proof.txt del proof.txt
+
+.\test_host.exe >nul 2>&1
+
+set T10_OK=1
+if not exist proof.txt (
+    echo [-] FAIL: Proof file missing
+    set T10_OK=0
+    set /a FAIL+=1
+)
+
+python "%ROOT%\test\verify_meta.py" original_version.dll version.dll >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Metadata/signature verification failed
+    set T10_OK=0
+    set /a FAIL+=1
+)
+
+if "!T10_OK!"=="1" (
+    echo [+] PASS: GCC embed + block + metatwin
+    set /a PASS+=1
+)
+
 :summary
 echo.
 echo ============================================================

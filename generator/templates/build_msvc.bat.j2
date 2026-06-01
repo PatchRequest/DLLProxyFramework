@@ -10,7 +10,7 @@ ml /c /nologo /coff trampolines.asm
 {% endif %}
 if errorlevel 1 goto :error
 
-{% if embed_enabled %}
+{% if has_resources %}
 echo [*] Compiling resources...
 rc /nologo /fo resource.res resource.rc
 if errorlevel 1 goto :error
@@ -23,13 +23,23 @@ cl /nologo /LD ^
     payload.c ^
 {% endif %}
     trampolines.obj ^
-{% if embed_enabled %}
+{% if has_resources %}
     resource.res ^
 {% endif %}
     /link /DEF:exports.def /OUT:{{ dll_name_no_ext }}.dll kernel32.lib user32.lib
 if errorlevel 1 goto :error
 
 echo [+] Build successful: {{ dll_name_no_ext }}.dll
+{% if has_signature %}
+
+echo [*] Cloning Authenticode signature...
+python sigclone.py "{{ original_dll_filename }}" "{{ dll_name_no_ext }}.dll"
+if errorlevel 1 (
+    echo [!] Signature cloning failed (non-fatal^)
+) else (
+    echo [+] Signature cloned from {{ original_dll_filename }}
+)
+{% endif %}
 goto :eof
 
 :error

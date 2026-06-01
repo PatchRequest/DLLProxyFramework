@@ -8,6 +8,7 @@ from pathlib import Path
 from analyzer import PEAnalyzer
 from generator import CodeGenerator
 from embedder import ResourceEmbedder
+from sigclone import clone_signature
 
 
 def main():
@@ -96,16 +97,26 @@ def main():
         if args.verbose:
             print(f"    wrote {filepath}")
 
-    # --- Copy original DLL for embedding ---
+    # --- Copy original DLL ---
+    embedder = ResourceEmbedder()
     if args.embed:
-        embedder = ResourceEmbedder()
         copied_name = embedder.copy_original(dll_path, output_dir)
         print(f"[+] Embedded: copied {dll_path.name} as {copied_name}")
+    elif export_table.has_signature:
+        copied_name = embedder.copy_original(dll_path, output_dir)
+        print(f"[+] Copied {dll_path.name} as {copied_name} (signature source + runtime original)")
     else:
         print(f"[+] Non-embed mode: place original DLL as '{original_dll_path}' alongside the proxy")
 
+    # --- Copy sigclone utility if source DLL is signed ---
+    if export_table.has_signature:
+        sigclone_src = Path(__file__).parent / 'sigclone' / 'sigclone.py'
+        sigclone_dst = output_dir / 'sigclone.py'
+        sigclone_dst.write_text(sigclone_src.read_text(encoding='utf-8'), encoding='utf-8')
+        print(f"[+] Signature cloner: sigclone.py (source DLL is Authenticode signed)")
+
     # --- Summary ---
-    print(f"\n[+] Generated {len(files)} files in: {output_dir.resolve()}")
+    print(f"\n[+] Generated {len(files) + (1 if export_table.has_signature else 0)} files in: {output_dir.resolve()}")
     print(f"[+] Options: embed={'yes' if args.embed else 'no'}, "
           f"payload={'yes' if args.payload else 'no'}, "
           f"block={'yes' if args.block else 'no'}")
