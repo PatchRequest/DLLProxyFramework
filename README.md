@@ -315,6 +315,66 @@ target_app/
 
 That's it. One file. The `.exe` in the logs is a signed vendor binary.
 
+## DLL Hijack Scanner
+
+The built-in scanner finds sideloading targets automatically. It walks the filesystem, parses PE import tables, and reports executables that load DLLs vulnerable to hijacking.
+
+**What it detects:**
+
+- **Phantom DLLs** — imported but don't exist anywhere on disk. Drop any DLL with that name and it loads.
+- **Search-order hijack** — DLL exists in System32 but not in the app's directory, and the app directory is writable. Plant a proxy there and it loads before the real one.
+
+Both static and delayed imports are checked. Results are scored by exploitability (phantom > search-order, signed > unsigned, user-writable > protected, delayed > static).
+
+```
+python scan.py                                        # scan all drives
+python scan.py C:\Users D:\Apps                       # scan specific paths
+python scan.py --signed-only --skip-windows           # signed EXEs only, skip C:\Windows
+python scan.py --json -o results.json                 # JSON output + save to file
+python scan.py --generate                             # auto-generate proxy projects for findings
+python scan.py --generate --generate-compiler msvc    # generate MSVC-only projects
+```
+
+### Scanner options
+
+```
+positional:
+  paths                          Directories to scan (default: all drives)
+
+options:
+  -t, --threads N                Worker threads (default: 8)
+  --signed-only                  Only report signed host EXEs
+  --skip-windows                 Skip C:\Windows tree (faster)
+  -o, --output FILE              Save JSON results to file
+  --json                         Print JSON to stdout
+  -q, --quiet                    No progress output
+  --generate                     Auto-generate proxy projects for search-order hits
+  --generate-compiler {msvc,gcc,both}  Compiler for generated projects (default: both)
+  --generate-output DIR          Output root for generated projects (default: ./output/scan/)
+```
+
+### Score system
+
+Each finding gets a priority score (higher = better target):
+
+| Factor | Score |
+|--------|-------|
+| Phantom DLL | +3 |
+| Search-order hijack | +1 |
+| Host EXE is signed | +2 |
+| Delayed import | +1 |
+| User-writable path (AppData, Users, Temp) | +1 |
+
+### Pipeline: scan + generate
+
+Scan a system, then auto-generate proxy projects for every finding that has a known source DLL:
+
+```
+python scan.py C:\Users --signed-only --generate --generate-compiler msvc
+```
+
+This runs the scanner, then invokes `generate.py` for each unique (source DLL, architecture) pair with `--payload --embed --block`. Output lands in `./output/scan/`.
+
 ## Non-Embed Mode
 
 Without `--embed`, the proxy loads the original DLL from disk at runtime. Rename the original and place it alongside the proxy:

