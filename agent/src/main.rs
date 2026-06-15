@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 // ── Config ───────────────────────────────────────────────────
 
 const SERVER_URL: &str = "http://127.0.0.1:8443";
-const CHECKIN_INTERVAL: Duration = Duration::from_secs(30);
-const SCAN_PATHS: &[&str] = &["C:\\"];
+const CHECKIN_INTERVAL: Duration = Duration::from_secs(5);
+const SCAN_PATHS: &[&str] = &["E:\\code\\DLLProxyFramework\\test\\smoketest"];
 
 // ── API types ────────────────────────────────────────────────
 

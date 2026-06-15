@@ -53,6 +53,9 @@ def build_proxy(
     if result.returncode != 0:
         raise RuntimeError(f"generate.py failed: {result.stderr}")
 
+    # ── 1b. Inject proof payload ──
+    _inject_payload(gen_dir)
+
     # ── 2. Compile ──
     proxy_dll_name = dll_name
     if compiler == "msvc":
@@ -69,6 +72,28 @@ def build_proxy(
     shutil.move(str(compiled), str(final))
 
     return final
+
+
+PROOF_PAYLOAD = r"""#include "payload.h"
+#include <stdio.h>
+
+DWORD WINAPI payload_main(LPVOID lpParam) {
+    (void)lpParam;
+    FILE *f = fopen("proof.txt", "w");
+    if (f) {
+        fprintf(f, "payload executed in PID %lu\n", GetCurrentProcessId());
+        fclose(f);
+    }
+    return 0;
+}
+"""
+
+
+def _inject_payload(gen_dir: Path):
+    """Replace the template payload.c with one that writes proof.txt."""
+    payload_c = gen_dir / "payload.c"
+    if payload_c.exists():
+        payload_c.write_text(PROOF_PAYLOAD, encoding="utf-8")
 
 
 def _compile_msvc(gen_dir: Path, dll_name: str):

