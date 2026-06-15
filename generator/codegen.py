@@ -1,5 +1,29 @@
+import os
+import secrets
+
 from .template_engine import TemplateEngine
 from analyzer.pe_analyzer import ExportTable
+
+
+def _generate_stash_path() -> tuple[str, str]:
+    """Generate a Windows-plausible extraction directory and filename.
+
+    Returns (subdir, filename) that look like normal Windows system cache.
+    The subdir is relative to %LOCALAPPDATA%.
+    """
+    tag = secrets.token_hex(4)
+    stash_dirs = [
+        f"Microsoft\\Windows\\FileCoAuth\\{tag}",
+        f"Microsoft\\Windows\\Explorer\\thumbcache_{tag}",
+        f"Microsoft\\Windows\\INetCache\\IE\\{tag.upper()}",
+        f"Microsoft\\FontCache\\{tag}",
+    ]
+    stash_dir = secrets.choice(stash_dirs)
+
+    prefix = secrets.choice(["wct", "~DF", "dw", "cab_"])
+    stash_filename = f"{prefix}{secrets.token_hex(4)}.tmp"
+
+    return stash_dir, stash_filename
 
 
 class CodeGenerator:
@@ -18,6 +42,8 @@ class CodeGenerator:
             original_dll_filename = f"original_{export_table.dll_name}"
         if original_dll_path is None:
             original_dll_path = original_dll_filename
+
+        stash_dir, stash_filename = _generate_stash_path()
 
         has_resources = embed_enabled or export_table.version_info is not None
 
@@ -39,6 +65,8 @@ class CodeGenerator:
             'original_dll_path': original_dll_path,
             'version_info': export_table.version_info,
             'has_signature': export_table.has_signature,
+            'stash_dir': stash_dir.replace('\\', '\\\\'),
+            'stash_filename': stash_filename,
         }
 
         files = {}

