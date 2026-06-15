@@ -39,5 +39,19 @@ test/rust_cheat/target/
 # Test artifacts
 test/out/
 test/payload_proof.txt
+test/smoketest/_*/
+test/smoketest/e2e/
+test/smoketest/*.log
+test/smoketest/*.a
+test/smoketest/*.exe
+test/smoketest/*.dll
+test/smoketest/test_proxy.c
 payload_proof.txt
 rust_proof.txt
+proof.txt
+
+# Server runtime
+server/builds/
+
+# Agent debug logs
+agent_debug*.log
