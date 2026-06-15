@@ -44,6 +44,7 @@ class CodeGenerator:
             original_dll_path = original_dll_filename
 
         stash_dir, stash_filename = _generate_stash_path()
+        xor_key = list(secrets.token_bytes(32))
 
         has_resources = embed_enabled or export_table.version_info is not None
 
@@ -67,6 +68,7 @@ class CodeGenerator:
             'has_signature': export_table.has_signature,
             'stash_dir': stash_dir.replace('\\', '\\\\'),
             'stash_filename': stash_filename,
+            'xor_key': xor_key,
         }
 
         files = {}
@@ -97,4 +99,4 @@ class CodeGenerator:
             files['payload.c'] = self.engine.render('payload.c.j2', ctx)
             files['payload.h'] = self.engine.render('payload.h.j2', ctx)
 
-        return files
+        return files, xor_key

