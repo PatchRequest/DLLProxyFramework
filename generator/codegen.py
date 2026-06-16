@@ -34,6 +34,9 @@ class CodeGenerator:
                  embed_enabled: bool = False,
                  payload_enabled: bool = False,
                  block_enabled: bool = False,
+                 payload_bin_enabled: bool = False,
+                 payload_bin_filename: str | None = None,
+                 payload_export: str | None = None,
                  compiler: str = 'both',
                  original_dll_filename: str | None = None,
                  original_dll_path: str | None = None) -> dict[str, str]:
@@ -46,7 +49,14 @@ class CodeGenerator:
         stash_dir, stash_filename = _generate_stash_path()
         xor_key = list(secrets.token_bytes(32))
 
-        has_resources = embed_enabled or export_table.version_info is not None
+        payload_xor_key = None
+        payload_stash_dir = None
+        payload_stash_filename = None
+        if payload_bin_enabled:
+            payload_stash_dir, payload_stash_filename = _generate_stash_path()
+            payload_xor_key = list(secrets.token_bytes(32))
+
+        has_resources = embed_enabled or payload_bin_enabled or export_table.version_info is not None
 
         ctx = {
             'dll_name': export_table.dll_name,
@@ -61,6 +71,9 @@ class CodeGenerator:
             'embed_enabled': embed_enabled,
             'payload_enabled': payload_enabled,
             'block_enabled': block_enabled,
+            'payload_bin_enabled': payload_bin_enabled,
+            'payload_bin_filename': payload_bin_filename or 'payload_bin.dat',
+            'payload_export': payload_export,
             'has_resources': has_resources,
             'original_dll_filename': original_dll_filename,
             'original_dll_path': original_dll_path,
@@ -69,6 +82,9 @@ class CodeGenerator:
             'stash_dir': stash_dir.replace('\\', '\\\\'),
             'stash_filename': stash_filename,
             'xor_key': xor_key,
+            'payload_xor_key': payload_xor_key,
+            'payload_stash_dir': (payload_stash_dir or '').replace('\\', '\\\\'),
+            'payload_stash_filename': payload_stash_filename or '',
         }
 
         files = {}
@@ -99,4 +115,4 @@ class CodeGenerator:
             files['payload.c'] = self.engine.render('payload.c.j2', ctx)
             files['payload.h'] = self.engine.render('payload.h.j2', ctx)
 
-        return files, xor_key
+        return files, xor_key, payload_xor_key

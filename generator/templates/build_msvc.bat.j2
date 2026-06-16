@@ -40,7 +40,7 @@ if errorlevel 1 (
     echo [+] Signature cloned from {{ original_dll_filename }}
 )
 {% endif %}
-goto :eof
+exit /b 0
 
 :error
 echo [-] Build failed!

@@ -31,6 +31,7 @@
   .tag-replace { background: rgba(210,153,34,0.15); color: var(--yellow); }
   .tag-search { background: rgba(88,166,255,0.15); color: var(--accent); }
   .tag-phantom { background: rgba(248,81,73,0.15); color: var(--red); }
+  .tag-payload { background: rgba(63,185,80,0.15); color: var(--green); }
 
   .status { font-weight: bold; }
   .status-waiting_upload { color: var(--yellow); }
@@ -44,6 +45,7 @@
   button:hover { opacity: 0.85; }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
   button.small { padding: 3px 10px; font-size: 11px; }
+  button.danger { background: var(--red); }
 
   .agent-row { cursor: pointer; }
   .agent-row:hover { background: rgba(88,166,255,0.08); }
@@ -52,6 +54,11 @@
   .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
   .back { color: var(--accent); cursor: pointer; font-size: 13px; }
   .back:hover { text-decoration: underline; }
+
+  .payload-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .payload-bar input[type="file"] { font-family: inherit; font-size: 12px; color: var(--text); }
+  .payload-bar input[type="text"] { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+                                     padding: 4px 8px; border-radius: 4px; font-family: inherit; font-size: 12px; width: 160px; }
 
   #toast { position: fixed; top: 20px; right: 20px; background: var(--surface);
            border: 1px solid var(--green); color: var(--green); padding: 12px 20px;
@@ -62,6 +69,7 @@
 
 <div class="container">
   <h1>// DLL Proxy Deploy</h1>
+  <div id="payload-panel"></div>
   <div id="content"></div>
 </div>
 <div id="toast"></div>
@@ -92,6 +100,47 @@ async function api(path, opts) {
   const r = await fetch(API + path, opts);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
+}
+
+// ── Payload DLL Panel ──
+async function refreshPayload() {
+  const data = await api('/api/payload');
+  const el = document.getElementById('payload-panel');
+  if (data.configured) {
+    const exp = data.export ? ` &rarr; ${data.export}()` : '';
+    el.innerHTML = `<div class="panel"><div class="payload-bar">
+      <span class="tag tag-payload">PAYLOAD</span>
+      <span><strong>${data.filename}</strong>${exp}</span>
+      <button class="small danger" onclick="removePayload()">Remove</button>
+      </div></div>`;
+  } else {
+    el.innerHTML = `<div class="panel"><div class="payload-bar">
+      <span class="meta">No payload DLL configured &mdash; builds will use proof payload</span>
+      <input type="file" id="payloadFile" accept=".dll">
+      <input type="text" id="payloadExport" placeholder="Export (optional)">
+      <button class="small" onclick="uploadPayload()">Upload</button>
+      </div></div>`;
+  }
+}
+
+async function uploadPayload() {
+  const fileInput = document.getElementById('payloadFile');
+  const exportInput = document.getElementById('payloadExport');
+  if (!fileInput.files.length) { toast('Select a DLL file', false); return; }
+  const form = new FormData();
+  form.append('file', fileInput.files[0]);
+  form.append('export_name', exportInput.value);
+  try {
+    await fetch(API + '/api/payload', { method: 'POST', body: form });
+    toast('Payload DLL configured');
+    refreshPayload();
+  } catch(e) { toast('Error: ' + e.message, false); }
+}
+
+async function removePayload() {
+  await fetch(API + '/api/payload', { method: 'DELETE' });
+  toast('Payload removed');
+  refreshPayload();
 }
 
 // ── Agent List ──
@@ -131,13 +180,16 @@ async function showClient(clientId) {
 
   // Builds
   if (data.builds.length > 0) {
-    html += '<h2>Builds</h2><div class="panel"><table><tr><th>ID</th><th>Target</th><th>Status</th></tr>';
+    html += '<h2>Builds</h2><div class="panel"><table><tr><th>ID</th><th>Target</th><th>Payload</th><th>Status</th></tr>';
     for (const b of data.builds) {
       const target = data.targets.find(t => t.id === b.target_id);
       const tname = target ? `${target.dll_name}` : `#${b.target_id}`;
-      html += `<tr><td class="meta">${b.id}</td><td>${tname}</td>
+      const payloadCol = b.payload_dll_path
+        ? `<span class="tag tag-payload">${b.payload_dll_path.split(/[\\/]/).pop()}</span>`
+        : '<span class="meta">proof</span>';
+      html += `<tr><td class="meta">${b.id}</td><td>${tname}</td><td>${payloadCol}</td>
         <td><span class="status status-${b.status}">${b.status}</span></td></tr>`;
-      if (b.error) html += `<tr><td colspan=3 class="meta" style="color:var(--red)">${b.error}</td></tr>`;
+      if (b.error) html += `<tr><td colspan=4 class="meta" style="color:var(--red)">${b.error}</td></tr>`;
     }
     html += '</table></div>';
   }
@@ -186,6 +238,7 @@ async function selectTarget(clientId, targetId) {
 }
 
 // Boot
+refreshPayload();
 showClients();
 </script>
 </body>

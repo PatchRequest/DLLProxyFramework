@@ -76,6 +76,8 @@ class Build:
     status: BuildStatus = BuildStatus.WAITING_UPLOAD
     original_dll_path: str = ""
     proxy_dll_path: str = ""
+    payload_dll_path: str = ""
+    payload_export: str = ""
     error: str = ""
 
     def to_dict(self) -> dict:
@@ -115,6 +117,8 @@ class Store:
         self.tasks: dict[str, AgentTask] = {}
         self.builds: dict[str, Build] = {}
         self._target_counter = 0
+        self.payload_dll_path: str = ""
+        self.payload_export: str = ""
 
     def upsert_agent(self, agent_id: str, hostname: str, username: str,
                      os_info: str, targets_raw: list[dict]) -> Agent:
@@ -163,7 +167,9 @@ class Store:
                 return t
         return None
 
-    def create_build(self, agent_id: str, target_id: int) -> Build:
+    def create_build(self, agent_id: str, target_id: int,
+                     payload_dll_path: str = "",
+                     payload_export: str = "") -> Build:
         build_id = uuid.uuid4().hex[:12]
         target = self.get_target(agent_id, target_id)
         build = Build(
@@ -173,6 +179,8 @@ class Store:
             exe_path=target.exe_path if target else "",
             vector=target.vector if target else "",
             arch=target.arch if target else "x64",
+            payload_dll_path=payload_dll_path,
+            payload_export=payload_export,
         )
         with self._lock:
             self.builds[build_id] = build

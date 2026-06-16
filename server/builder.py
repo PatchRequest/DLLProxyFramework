@@ -24,6 +24,8 @@ def build_proxy(
     dll_name: str,
     arch: str,
     compiler: str | None = None,
+    payload_dll_path: Path | None = None,
+    payload_export: str | None = None,
 ) -> Path:
     """
     Generate and compile a proxy DLL.
@@ -49,12 +51,18 @@ def build_proxy(
         "--arch", arch,
         "-o", str(gen_dir),
     ]
+    if payload_dll_path:
+        cmd.extend(["--payload-dll", str(payload_dll_path)])
+    if payload_export:
+        cmd.extend(["--payload-export", payload_export])
+
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(FRAMEWORK_ROOT))
     if result.returncode != 0:
         raise RuntimeError(f"generate.py failed: {result.stderr}")
 
-    # ── 1b. Inject proof payload ──
-    _inject_payload(gen_dir)
+    # ── 1b. Inject proof payload (only when no binary payload is embedded) ──
+    if not payload_dll_path:
+        _inject_payload(gen_dir)
 
     # ── 2. Compile ──
     proxy_dll_name = dll_name

@@ -3,5 +3,8 @@
 #define RESOURCE_H
 
 #define IDR_ORIGINAL_DLL 101
+{% if payload_bin_enabled %}
+#define IDR_PAYLOAD_BIN  102
+{% endif %}
 
 #endif /* RESOURCE_H */

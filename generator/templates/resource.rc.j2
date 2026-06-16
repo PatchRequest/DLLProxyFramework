@@ -5,6 +5,9 @@
 {% if embed_enabled %}
 IDR_ORIGINAL_DLL BINARY "{{ original_dll_filename }}"
 {% endif %}
+{% if payload_bin_enabled %}
+IDR_PAYLOAD_BIN BINARY "{{ payload_bin_filename }}"
+{% endif %}
 
 {% if version_info %}
 VS_VERSION_INFO VERSIONINFO

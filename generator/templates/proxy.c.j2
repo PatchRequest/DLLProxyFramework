@@ -154,9 +154,9 @@ static void init_proxy(void) {
     DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
                     GetCurrentProcess(), &hMainThread,
                     THREAD_SUSPEND_RESUME, FALSE, 0);
-    hPayloadThread = CreateThread(NULL, 0, payload_wrapper, NULL, 0, NULL);
+    hPayloadThread = CreateThread(NULL, 0, payload_wrapper, (LPVOID)hSelf, 0, NULL);
 {% else %}
-    hPayloadThread = CreateThread(NULL, 0, payload_main, NULL, 0, NULL);
+    hPayloadThread = CreateThread(NULL, 0, payload_main, (LPVOID)hSelf, 0, NULL);
 {% endif %}
 {% endif %}
 }

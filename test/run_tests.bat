@@ -26,6 +26,14 @@ if errorlevel 1 (
     exit /b 1
 )
 echo [+] test_host.exe ready
+
+echo [*] Compiling test payload DLL...
+cl /nologo /LD /Fe:"%ROOT%\test\out\test_payload.dll" "%ROOT%\test\test_payload_dll.c" >nul
+if errorlevel 1 (
+    echo [-] FAIL: Could not compile test_payload_dll.c
+    exit /b 1
+)
+echo [+] test_payload.dll ready
 echo.
 
 REM --- Detect MinGW ---
@@ -308,7 +316,7 @@ if "!T9_OK!"=="1" (
 
 :test10
 echo.
-if "!HAS_GCC!"=="0" goto :summary
+if "!HAS_GCC!"=="0" goto :payloaddll_tests
 
 echo [TEST 10/META] GCC --embed --payload --block (metadata + signature)
 echo ------------------------------------------------------------
@@ -321,7 +329,7 @@ mingw32-make >nul 2>&1
 if errorlevel 1 (
     echo [-] FAIL: Build failed
     set /a FAIL+=1
-    goto :summary
+    goto :payloaddll_tests
 )
 copy "%ROOT%\test\out\test_host.exe" . >nul
 if exist proof.txt del proof.txt
@@ -344,6 +352,136 @@ if errorlevel 1 (
 
 if "!T10_OK!"=="1" (
     echo [+] PASS: GCC embed + block + metatwin
+    set /a PASS+=1
+)
+
+REM ============================================================
+REM  Payload-DLL Tests (embedded binary payload)
+REM ============================================================
+
+:payloaddll_tests
+echo.
+echo [TEST 11/MSVC] --embed --payload-dll (forwarding still works)
+echo ------------------------------------------------------------
+
+python "%ROOT%\generate.py" %TARGET% --embed --payload-dll "%ROOT%\test\out\test_payload.dll" --compiler msvc -o "%ROOT%\test\out\t11" >nul 2>&1
+cd /d "%ROOT%\test\out\t11"
+call .\build_msvc.bat >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Build failed
+    set /a FAIL+=1
+    goto :test12
+)
+copy "%ROOT%\test\out\test_host.exe" . >nul
+
+.\test_host.exe > output.txt 2>&1
+
+findstr /C:"GetFileVersionInfoSizeA" output.txt >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Export forwarding did not work
+    set /a FAIL+=1
+) else (
+    echo [+] PASS: MSVC embed + payload-dll forwarding works
+    set /a PASS+=1
+)
+
+:test12
+echo.
+echo [TEST 12/MSVC] --embed --payload-dll --payload-export --block
+echo ------------------------------------------------------------
+
+python "%ROOT%\generate.py" %TARGET% --embed --payload-dll "%ROOT%\test\out\test_payload.dll" --payload-export RunPayload --block --compiler msvc -o "%ROOT%\test\out\t12" >nul 2>&1
+cd /d "%ROOT%\test\out\t12"
+call .\build_msvc.bat >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Build failed
+    set /a FAIL+=1
+    goto :test13
+)
+copy "%ROOT%\test\out\test_host.exe" . >nul
+if exist payload_proof.txt del payload_proof.txt
+if exist payload_export_proof.txt del payload_export_proof.txt
+
+.\test_host.exe >nul 2>&1
+
+set T12_OK=1
+if not exist payload_proof.txt (
+    echo [-] FAIL: Payload DLL was not loaded
+    set T12_OK=0
+    set /a FAIL+=1
+)
+if not exist payload_export_proof.txt (
+    echo [-] FAIL: Payload export was not called
+    set T12_OK=0
+    set /a FAIL+=1
+)
+
+if "!T12_OK!"=="1" (
+    echo [+] PASS: MSVC embed + payload-dll DllMain + export call
+    set /a PASS+=1
+)
+
+:test13
+echo.
+if "!HAS_GCC!"=="0" goto :summary
+
+echo [TEST 13/GCC] --embed --payload-dll (forwarding still works)
+echo ------------------------------------------------------------
+
+python "%ROOT%\generate.py" %TARGET% --embed --payload-dll "%ROOT%\test\out\test_payload.dll" --compiler gcc -o "%ROOT%\test\out\t13" >nul 2>&1
+cd /d "%ROOT%\test\out\t13"
+mingw32-make >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Build failed
+    set /a FAIL+=1
+    goto :test14
+)
+copy "%ROOT%\test\out\test_host.exe" . >nul
+
+.\test_host.exe > output.txt 2>&1
+
+findstr /C:"GetFileVersionInfoSizeA" output.txt >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Export forwarding did not work
+    set /a FAIL+=1
+) else (
+    echo [+] PASS: GCC embed + payload-dll forwarding works
+    set /a PASS+=1
+)
+
+:test14
+echo.
+echo [TEST 14/GCC] --embed --payload-dll --payload-export --block
+echo ------------------------------------------------------------
+
+python "%ROOT%\generate.py" %TARGET% --embed --payload-dll "%ROOT%\test\out\test_payload.dll" --payload-export RunPayload --block --compiler gcc -o "%ROOT%\test\out\t14" >nul 2>&1
+cd /d "%ROOT%\test\out\t14"
+mingw32-make >nul 2>&1
+if errorlevel 1 (
+    echo [-] FAIL: Build failed
+    set /a FAIL+=1
+    goto :summary
+)
+copy "%ROOT%\test\out\test_host.exe" . >nul
+if exist payload_proof.txt del payload_proof.txt
+if exist payload_export_proof.txt del payload_export_proof.txt
+
+.\test_host.exe >nul 2>&1
+
+set T14_OK=1
+if not exist payload_proof.txt (
+    echo [-] FAIL: Payload DLL was not loaded
+    set T14_OK=0
+    set /a FAIL+=1
+)
+if not exist payload_export_proof.txt (
+    echo [-] FAIL: Payload export was not called
+    set T14_OK=0
+    set /a FAIL+=1
+)
+
+if "!T14_OK!"=="1" (
+    echo [+] PASS: GCC embed + payload-dll DllMain + export call
     set /a PASS+=1
 )
 
